@@ -1,0 +1,15 @@
+# Force LF line endings for all shell scripts (critical for Docker containers)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Force LF for Docker and CI files
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Force LF for Python
+*.py text eol=lf
+
+# Force LF for SQL
+*.sql text eol=lf
