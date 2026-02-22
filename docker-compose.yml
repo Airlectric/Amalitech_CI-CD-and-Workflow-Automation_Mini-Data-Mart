@@ -1,8 +1,42 @@
 # Mini Data Platform — Docker Compose
-# Services will be configured in Phase 2
+# PostgreSQL 16 | MinIO | Airflow 2.10.5 | Metabase
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+    # Increase timeouts for slower environments (WSL2, CI runners, low-spec machines)
+    AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "600"
+    AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "600"
+    AIRFLOW__WEBSERVER__WORKERS: "1"
+    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    AWS_ENDPOINT_URL: http://minio:9000
+    APP_DB_HOST: postgres
+    APP_DB_PORT: "5432"
+    APP_DB_USER: ${POSTGRES_USER}
+    APP_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    APP_DB_NAME: ${POSTGRES_DB}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
 
 services:
+  # ============================================================
   # PostgreSQL — Structured data storage
+  # ============================================================
   postgres:
     image: postgres:16-alpine
     container_name: data-platform-postgres
@@ -11,17 +45,163 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5434}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    shm_size: 256mb
+    # Healthcheck verifies ALL databases exist — prevents false "healthy" during init phase.
+    # pg_isready passes during the temp init server, but checking the airflow DB ensures
+    # the init scripts have completed and the main server has started.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} && psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c 'SELECT 1' -q -t",
+        ]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # ============================================================
+  # MinIO — S3-compatible object storage
+  # ============================================================
+  minio:
+    image: minio/minio:latest
+    container_name: data-platform-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT:-9002}:9000"
+      - "${MINIO_CONSOLE_PORT:-9003}:9001"
+    volumes:
+      - minio-data:/data
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  # MinIO bucket initialization (runs once then exits)
+  minio-init:
+    image: minio/mc:latest
+    container_name: data-platform-minio-init
+    entrypoint: /bin/sh
+    command: /init-minio.sh
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./scripts/init-minio.sh:/init-minio.sh
+    depends_on:
+      - minio
+    restart: "no"
+
+  # ============================================================
+  # Apache Airflow — ETL pipeline orchestration
+  # ============================================================
+
+  # DB migration + admin user creation (runs once then exits)
+  airflow-init:
+    <<: *airflow-common
+    container_name: data-platform-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "==> Waiting for Airflow DB connection..."
+        for i in $$(seq 1 60); do
+          airflow db check > /dev/null 2>&1 && break
+          echo "    Attempt $$i/60 — DB not ready, retrying in 3s..."
+          sleep 3
+        done
+
+        echo "==> Running database migrations..."
+        airflow db migrate
+
+        echo "==> Creating admin user..."
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com || true
+
+        echo "==> Airflow init complete."
+    restart: "no"
+
+  # Airflow webserver (UI on port 8080)
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: data-platform-airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 300s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Airflow scheduler (triggers DAG runs)
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: data-platform-airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "airflow jobs check --job-type SchedulerJob --hostname $(hostname) || exit 1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+
+  # ============================================================
+  # Metabase — BI dashboards & visualization
+  # ============================================================
+  metabase:
+    image: metabase/metabase:latest
+    container_name: data-platform-metabase
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
+      MB_DB_HOST: postgres
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    stop_grace_period: 15s
+    restart: unless-stopped
 
 volumes:
   postgres-data:
+  minio-data:
+  airflow-logs:
 
 networks:
   default:

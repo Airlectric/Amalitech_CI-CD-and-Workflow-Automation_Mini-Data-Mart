@@ -16,8 +16,8 @@ CSV Generator → MinIO (Storage) → Airflow (ETL) → PostgreSQL (Database) �
 
 | Component       | Technology       | Port      | Purpose                     |
 |-----------------|------------------|-----------|-----------------------------|
-| Database        | PostgreSQL 16    | 5432      | Structured data storage     |
-| Object Storage  | MinIO            | 9000/9001 | S3-compatible file storage  |
+| Database        | PostgreSQL 16    | 5434      | Structured data storage     |
+| Object Storage  | MinIO            | 9002/9003 | S3-compatible file storage  |
 | Orchestration   | Apache Airflow   | 8080      | ETL pipeline scheduling     |
 | Visualization   | Metabase         | 3000      | BI dashboards & reporting   |
 | CI/CD           | GitHub Actions   | —         | Automated pipelines         |
@@ -53,8 +53,8 @@ docker compose ps
 |-----------------|------------------------------|-----------------------------|
 | Airflow UI      | http://localhost:8080        | admin / admin               |
 | Metabase        | http://localhost:3000        | Set up on first visit       |
-| MinIO Console   | http://localhost:9001        | minioadmin / changeme123    |
-| PostgreSQL      | localhost:5432               | dataplatform / changeme     |
+| MinIO Console   | http://localhost:9003        | minioadmin / changeme123    |
+| PostgreSQL      | localhost:5434               | dataplatform / changeme     |
 
 ## Project Structure
 
