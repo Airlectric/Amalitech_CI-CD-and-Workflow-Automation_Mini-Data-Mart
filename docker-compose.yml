@@ -1,3 +1,4 @@
+version: '3.9'
 
 services:
   postgres:
@@ -15,6 +16,27 @@ services:
       retries: 5
     ports:
       - "${METADATA_POSTGRES_LOCAL_PORT}:5432"
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql-db-volume:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 5
+    ports:
+      - "${MYSQL_LOCAL_PORT}:3306"
+
+  redis:
+    image: redis:7
+    ports:
+      - "${REDIS_LOCAL_PORT}:6379"
 
   minio:
     image: minio/minio:latest
@@ -45,105 +67,6 @@ services:
       - minio
     restart: "no"
 
-  airflow-init:
-    build:
-      context: .
-      dockerfile: docker/airflow/Dockerfile
-    container_name: data-platform-airflow-init
-    command: ["bash", "-c", "airflow db upgrade"]
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      AWS_ENDPOINT_URL: http://minio:9000
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./scripts:/opt/airflow/scripts
-      - airflow-logs:/opt/airflow/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_started
-    restart: "no"
-
-  airflow-webserver:
-    build:
-      context: .
-      dockerfile: docker/airflow/Dockerfile
-    container_name: data-platform-airflow-webserver
-    command: api-server
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      AWS_ENDPOINT_URL: http://minio:9000
-      APP_DB_HOST: postgres
-      APP_DB_PORT: "5432"
-      APP_DB_USER: ${POSTGRES_USER}
-      APP_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      APP_DB_NAME: ${POSTGRES_DB}
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./scripts:/opt/airflow/scripts
-      - airflow-logs:/opt/airflow/logs
-    ports:
-      - "8080:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_started
-      airflow-init:
-        condition: service_started
-    restart: unless-stopped
-
-  airflow-scheduler:
-    build:
-      context: .
-      dockerfile: docker/airflow/Dockerfile
-    container_name: data-platform-airflow-scheduler
-    command: scheduler
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      AWS_ENDPOINT_URL: http://minio:9000
-      APP_DB_HOST: postgres
-      APP_DB_PORT: "5432"
-      APP_DB_USER: ${POSTGRES_USER}
-      APP_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      APP_DB_NAME: ${POSTGRES_DB}
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./scripts:/opt/airflow/scripts
-      - airflow-logs:/opt/airflow/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_started
-      airflow-init:
-        condition: service_started
-      airflow-webserver:
-        condition: service_started
-    restart: unless-stopped
-
   metabase:
     image: metabase/metabase:latest
     container_name: data-platform-metabase
@@ -151,8 +74,8 @@ services:
       MB_DB_TYPE: postgres
       MB_DB_DBNAME: metabase
       MB_DB_PORT: 5432
-      MB_DB_USER: metabase
-      MB_DB_PASS: metabase
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
       MB_DB_HOST: postgres
     ports:
       - "3000:3000"
@@ -161,7 +84,229 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  airflow-api-server:
+    build: .
+    image: custom-airflow:local
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    command: api-server
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
+      AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__WEBSERVER__AUTHENTICATE: 'True'
+      AIRFLOW__WEBSERVER__AUTH_BACKEND: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
+      _AIRFLOW_WWW_USER_CREATE: ${_AIRFLOW_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _AIRFLOW_WWW_USER_ROLE: ${_AIRFLOW_WWW_USER_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${_AIRFLOW_WWW_USER_EMAIL}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${_AIRFLOW_WWW_USER_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${_AIRFLOW_WWW_USER_LASTNAME}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql
+    ports:
+      - "${AIRFLOW_WEB_PORT}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      retries: 5
+
+  airflow-scheduler:
+    image: custom-airflow:local
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
+      AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
+      AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__WEBSERVER__AUTHENTICATE: 'True'
+      AIRFLOW__WEBSERVER__AUTH_BACKEND: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      _AIRFLOW_WWW_USER_CREATE: ${_AIRFLOW_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _AIRFLOW_WWW_USER_ROLE: ${_AIRFLOW_WWW_USER_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${_AIRFLOW_WWW_USER_EMAIL}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${_AIRFLOW_WWW_USER_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${_AIRFLOW_WWW_USER_LASTNAME}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql
+
+  airflow-worker:
+    image: custom-airflow:local
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    command: celery worker
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
+      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
+      AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__WEBSERVER__AUTHENTICATE: 'True'
+      AIRFLOW__WEBSERVER__AUTH_BACKEND: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      _AIRFLOW_WWW_USER_CREATE: ${_AIRFLOW_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _AIRFLOW_WWW_USER_ROLE: ${_AIRFLOW_WWW_USER_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${_AIRFLOW_WWW_USER_EMAIL}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${_AIRFLOW_WWW_USER_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${_AIRFLOW_WWW_USER_LASTNAME}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql
+
+  airflow-dag-processor:
+    image: custom-airflow:local
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
+      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
+      AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      _AIRFLOW_WWW_USER_CREATE: ${_AIRFLOW_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _AIRFLOW_WWW_USER_ROLE: ${_AIRFLOW_WWW_USER_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${_AIRFLOW_WWW_USER_EMAIL}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${_AIRFLOW_WWW_USER_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${_AIRFLOW_WWW_USER_LASTNAME}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql
+
+  airflow-init:
+    image: custom-airflow:local
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    depends_on:
+      - postgres
+      - mysql
+      - redis
+      - minio
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
+      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      _AIRFLOW_WWW_USER_CREATE: ${_AIRFLOW_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _AIRFLOW_WWW_USER_ROLE: ${_AIRFLOW_WWW_USER_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${_AIRFLOW_WWW_USER_EMAIL}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${_AIRFLOW_WWW_USER_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${_AIRFLOW_WWW_USER_LASTNAME}
+    command: db migrate
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql
+
 volumes:
   postgres-db-volume:
+  mysql-db-volume:
   minio-data:
-  airflow-logs:
