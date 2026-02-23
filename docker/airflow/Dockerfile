@@ -1,11 +1,19 @@
-FROM apache/airflow:2.10.5-python3.12
 
+FROM apache/airflow:3.1.1-python3.11
+# Switch to root to install system packages first
+USER root
+# Optional: Install any OS-level deps if needed (e.g., for pandas or other libs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+# Switch to airflow user for Python package installation
 USER airflow
-
-# Install Python dependencies for the data pipeline
-RUN pip install --no-cache-dir \
-    boto3==1.35.* \
-    pandas==2.2.* \
-    psycopg2-binary==2.9.* \
-    apache-airflow-providers-amazon==9.1.* \
-    apache-airflow-providers-postgres==5.13.*
+# Install Python dependencies for MySQL and PostgreSQL connectors
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
+# Create directories with correct permissions (optional, for mounted volumes)
+USER root
+RUN mkdir -p /opt/airflow/dags /opt/airflow/logs /opt/airflow/data /opt/airflow/scripts \
+    && chown -R airflow: /opt/airflow
