@@ -228,6 +228,46 @@ services:
       - ./logs:/opt/airflow/logs
       - ./sql:/opt/airflow/sql
 
+  airflow-triggerer:
+    image: custom-airflow:local
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    command: triggerer
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__API: ${AIRFLOW_AUTH__JWT_SECRET_JWT_KEY}
+      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
+      AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      _AIRFLOW_WWW_USER_CREATE: ${_AIRFLOW_WWW_USER_CREATE}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _AIRFLOW_WWW_USER_ROLE: ${_AIRFLOW_WWW_USER_ROLE}
+      _AIRFLOW_WWW_USER_EMAIL: ${_AIRFLOW_WWW_USER_EMAIL}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${_AIRFLOW_WWW_USER_FIRSTNAME}
+      _AIRFLOW_WWW_USER_LASTNAME: ${_AIRFLOW_WWW_USER_LASTNAME}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql
+
   airflow-dag-processor:
     image: custom-airflow:local
     user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
