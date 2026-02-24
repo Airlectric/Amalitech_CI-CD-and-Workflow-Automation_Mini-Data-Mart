@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:16
@@ -16,22 +14,6 @@ services:
       retries: 5
     ports:
       - "${METADATA_POSTGRES_LOCAL_PORT}:5432"
-
-  mysql:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    volumes:
-      - mysql-db-volume:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      retries: 5
-    ports:
-      - "${MYSQL_LOCAL_PORT}:3306"
 
   redis:
     image: redis:7
@@ -94,8 +76,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_started
     environment:
@@ -108,7 +88,6 @@ services:
       AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
       AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
       AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       AIRFLOW__WEBSERVER__AUTHENTICATE: 'True'
@@ -146,8 +125,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_started
     environment:
@@ -160,7 +137,6 @@ services:
       AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
       AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
       AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
       AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -192,8 +168,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_started
     environment:
@@ -204,7 +178,6 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       AIRFLOW__WEBSERVER__RBAC: 'True'
       AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
-      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
       AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
@@ -237,8 +210,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_started
     environment:
@@ -248,8 +219,7 @@ services:
       AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       AIRFLOW__WEBSERVER__RBAC: 'True'
-      AIRFLOW__API: ${AIRFLOW_AUTH__JWT_SECRET_JWT_KEY}
-      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
       AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
@@ -277,8 +247,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_started
     environment:
@@ -289,7 +257,6 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       AIRFLOW__WEBSERVER__RBAC: 'True'
       AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
-      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
       AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
@@ -316,7 +283,6 @@ services:
     user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
     depends_on:
       - postgres
-      - mysql
       - redis
       - minio
     environment:
@@ -327,7 +293,6 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       AIRFLOW__WEBSERVER__RBAC: 'True'
       AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_KEY}
-      AIRFLOW_CONN_MYSQL_STAGING: ${AIRFLOW_CONN_MYSQL_STAGING}
       AIRFLOW_CONN_MINIO: ${AIRFLOW_CONN_MINIO}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AUTH_MANAGER_CLASS: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -348,5 +313,4 @@ services:
 
 volumes:
   postgres-db-volume:
-  mysql-db-volume:
   minio-data:
