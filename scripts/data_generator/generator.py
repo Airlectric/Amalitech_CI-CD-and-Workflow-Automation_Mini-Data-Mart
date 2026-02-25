@@ -26,15 +26,18 @@ def generate_sales_data(num_rows: int = 1000) -> pd.DataFrame:
     
     start_date = datetime(2024, 1, 1)
     
+    timestamps = [
+        start_date + timedelta(
+            days=random.randint(0, 365),
+            hours=random.randint(0, 23),
+            minutes=random.randint(0, 59)
+        ) for _ in range(num_rows)
+    ]
+    
     data = {
         "transaction_id": [f"TXN{i:08d}" for i in range(1, num_rows + 1)],
-        "timestamp": [
-            (start_date + timedelta(
-                days=random.randint(0, 365),
-                hours=random.randint(0, 23),
-                minutes=random.randint(0, 59)
-            )).isoformat() for _ in range(num_rows)
-        ],
+        "sale_date": [ts.date() for ts in timestamps],
+        "sale_hour": [ts.hour for ts in timestamps],
         "customer_id": [f"CUST{random.randint(1000, 9999)}" for _ in range(num_rows)],
         "customer_name": [
             random.choice(["John", "Jane", "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry"])
@@ -54,6 +57,10 @@ def generate_sales_data(num_rows: int = 1000) -> pd.DataFrame:
             weights=[40, 25, 15, 12, 8],
             k=num_rows
         ),
+        "sub_category": random.choices(
+            ["Gaming", "Business", "Home", "Office", "Mobile", "Audio", "Video"],
+            k=num_rows
+        ),
         "quantity": np.random.randint(1, 10, size=num_rows).tolist(),
         "unit_price": np.round(np.random.uniform(9.99, 1999.99, size=num_rows), 2).tolist(),
         "discount_percentage": np.round(np.random.uniform(0, 25, size=num_rows), 2).tolist(),
@@ -67,18 +74,31 @@ def generate_sales_data(num_rows: int = 1000) -> pd.DataFrame:
              "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose"],
             k=num_rows
         ),
+        "region": random.choices(
+            ["Northeast", "West", "Midwest", "Southwest", "Southeast"],
+            k=num_rows
+        ),
+        "is_weekend": [1 if ts.weekday() >= 5 else 0 for ts in timestamps],
+        "is_holiday": [0] * num_rows,
     }
     
     df = pd.DataFrame(data)
     
     df["discount_amount"] = np.round(df["unit_price"] * df["discount_percentage"] / 100, 2)
-    df["total_amount"] = np.round(df["unit_price"] * df["quantity"] - df["discount_amount"], 2)
+    df["gross_amount"] = np.round(df["unit_price"] * df["quantity"], 2)
+    df["net_amount"] = np.round(df["gross_amount"] - df["discount_amount"], 2)
+    df["profit_margin"] = np.round(np.random.uniform(5, 30, size=num_rows), 2).tolist()
+    
+    df["payment_category"] = df["payment_method"].apply(
+        lambda x: "Online" if x in ["Credit Card", "Debit Card", "Digital Wallet"] else "Offline"
+    )
     
     column_order = [
-        "transaction_id", "timestamp", "customer_id", "customer_name",
-        "product_id", "product_name", "category", "quantity", 
-        "unit_price", "discount_percentage", "discount_amount",
-        "total_amount", "payment_method", "store_location"
+        "transaction_id", "sale_date", "sale_hour", "customer_id", "customer_name",
+        "product_id", "product_name", "category", "sub_category", "quantity",
+        "unit_price", "discount_percentage", "discount_amount", "gross_amount",
+        "net_amount", "profit_margin", "payment_method", "payment_category",
+        "store_location", "region", "is_weekend", "is_holiday"
     ]
     
     df = df[column_order]
