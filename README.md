@@ -47,7 +47,7 @@ docker compose ps
 
 | Service         | URL                          | Credentials             |
 |-----------------|------------------------------|------------------------|
-| Airflow UI      | http://localhost:8080        | admin / airflow        |
+| Airflow UI      | http://localhost:8080        | admin / airflow (set via .env, FABAuthManager) |
 | Metabase        | http://localhost:3000        | Set up on first visit  |
 | MinIO Console   | http://localhost:9003        | minio / minio123       |
 | PostgreSQL      | localhost:5433               | airflow / airflow      |

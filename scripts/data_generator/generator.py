@@ -6,11 +6,23 @@ import os
 import uuid
 import hashlib
 from io import BytesIO
+import sys
+import os
+
+if __name__ != "__main__":
+    os.chdir('/opt/airflow')
+    sys.path.insert(0, '/opt/airflow/scripts')
+
+from log_utils import get_logger, StructuredLogger
+
+logger = StructuredLogger('GENERATOR')
 
 
 def generate_sales_data(num_rows: int = 1000) -> pd.DataFrame:
     np.random.seed(42)
     random.seed(42)
+    
+    logger.info("Generating sales data", rows=num_rows)
     
     start_date = datetime(2024, 1, 1)
     
@@ -71,6 +83,8 @@ def generate_sales_data(num_rows: int = 1000) -> pd.DataFrame:
     
     df = df[column_order]
     
+    logger.info("Sales data generated successfully", rows=len(df), columns=len(df.columns))
+    
     return df
 
 
@@ -83,7 +97,7 @@ def save_to_parquet_local(df: pd.DataFrame, output_path: str) -> str:
     """Save parquet to local filesystem"""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     df.to_parquet(output_path, engine="pyarrow", compression="snappy", index=False)
-    print(f"Generated {len(df)} rows -> {output_path}")
+    logger.info("Saved parquet file", path=output_path, rows=len(df))
     return output_path
 
 
@@ -103,6 +117,8 @@ def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str,
     filename = f"{dataset_name}_{unique_id}.parquet"
     s3_path = f"s3://{bucket}/{dataset_name}/ingest_date={ingest_date}/{filename}"
     
+    logger.info("Uploading to MinIO", bucket=bucket, path=s3_path, rows=len(df))
+    
     buffer = BytesIO()
     df.to_parquet(buffer, engine="pyarrow", compression="snappy", index=False)
     buffer.seek(0)
@@ -117,7 +133,7 @@ def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str,
         content_type="application/parquet"
     )
     
-    print(f"Uploaded {len(df)} rows to {s3_path}")
+    logger.info("Upload complete", path=s3_path, rows=len(df), checksum=checksum[:8])
     
     return {
         "file_path": s3_path,
@@ -139,6 +155,8 @@ def generate_batch_to_minio(batch_size: int = 1000, num_batches: int = 1,
     
     Returns list of metadata dicts for each uploaded file.
     """
+    logger.info("Starting batch generation", batch_size=batch_size, num_batches=num_batches)
+    
     uploaded_files = []
     
     for batch in range(1, num_batches + 1):
@@ -154,12 +172,16 @@ def generate_batch_to_minio(batch_size: int = 1000, num_batches: int = 1,
         
         uploaded_files.append(metadata)
     
+    logger.info("Batch generation complete", total_files=len(uploaded_files))
+    
     return uploaded_files
 
 
 def generate_batch_local(batch_size: int = 1000, num_batches: int = 1, 
-                         output_dir: str = "data/raw") -> list[str]:
+                        output_dir: str = "data/raw") -> list[str]:
     """Generate parquet files locally (for testing without MinIO)"""
+    logger.info("Generating local parquet files", batch_size=batch_size, num_batches=num_batches)
+    
     generated_files = []
     
     for batch in range(1, num_batches + 1):
@@ -171,6 +193,8 @@ def generate_batch_local(batch_size: int = 1000, num_batches: int = 1,
         save_to_parquet_local(df, filepath)
         generated_files.append(filepath)
     
+    logger.info("Local generation complete", total_files=len(generated_files))
+    
     return generated_files
 
 
@@ -179,6 +203,8 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     
     load_dotenv()
+    
+    logger.info("Starting data generator")
     
     minio_endpoint = os.getenv("MINIO_ROOT_USER", "minio") + ":" + os.getenv("MINIO_API_PORT", "9002")
     
@@ -197,6 +223,7 @@ if __name__ == "__main__":
         minio_client=s3_client
     )
     
+    logger.info("Data generation complete", files_generated=len(files))
     print(f"\nUploaded {len(files)} file(s) to MinIO")
     for f in files:
         print(f"  - {f['file_path']} ({f['record_count']} rows)")

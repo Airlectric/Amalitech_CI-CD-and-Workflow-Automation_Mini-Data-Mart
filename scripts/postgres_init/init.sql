@@ -1,3 +1,7 @@
+-- Create metabase database
+SELECT 'CREATE DATABASE metabase'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'metabase')\gexec
+
 -- Create Silver schema  
 CREATE SCHEMA IF NOT EXISTS silver;
 
@@ -170,3 +174,6 @@ GRANT USAGE ON SCHEMA metadata TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA silver TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA gold TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA metadata TO airflow;
+
+-- Grant privileges for metabase
+GRANT ALL PRIVILEGES ON DATABASE metabase TO airflow;
