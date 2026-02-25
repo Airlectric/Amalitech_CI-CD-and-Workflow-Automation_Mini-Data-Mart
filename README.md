@@ -1,26 +1,25 @@
 # Mini Data Platform
 
-> A containerized data platform using Docker Compose that collects, processes, stores, and visualizes data — with full CI/CD automation via GitHub Actions.
-
-<!-- TODO: Add CI/CD status badges here -->
+> A production-grade containerized data platform using Docker Compose that implements medallion architecture (Bronze Silver → Gold) with full → CI/CD automation.
 
 ## Architecture
 
-<!-- TODO: Add architecture diagram in Phase 7 -->
+See [docs/architecture.md](docs/architecture/architecture.md) for detailed diagrams.
 
 ```
-CSV Generator → MinIO (Storage) → Airflow (ETL) → PostgreSQL (Database) → Metabase (Dashboards)
+Data Generator → MinIO (Bronze) → Airflow + DuckDB → PostgreSQL (Silver/Gold) → Metabase
 ```
 
 ## Tech Stack
 
-| Component       | Technology       | Port      | Purpose                     |
-|-----------------|------------------|-----------|-----------------------------|
-| Database        | PostgreSQL 16    | 5434      | Structured data storage     |
-| Object Storage  | MinIO            | 9002/9003 | S3-compatible file storage  |
-| Orchestration   | Apache Airflow   | 8080      | ETL pipeline scheduling     |
-| Visualization   | Metabase         | 3000      | BI dashboards & reporting   |
-| CI/CD           | GitHub Actions   | —         | Automated pipelines         |
+| Component       | Technology       | Port      | Purpose                          |
+|-----------------|------------------|-----------|----------------------------------|
+| Data Lake       | MinIO            | 9002/9003 | Bronze layer (Parquet files)     |
+| Query Engine    | DuckDB           | —         | Schema-on-read validation        |
+| Database        | PostgreSQL 16    | 5433      | Silver/Gold layers + Metadata    |
+| Orchestration   | Apache Airflow   | 8080      | ETL pipeline scheduling          |
+| Visualization   | Metabase         | 3000      | BI dashboards & reporting        |
+| CI/CD           | GitHub Actions   | —         | Automated pipelines              |
 
 ## Prerequisites
 
@@ -33,72 +32,74 @@ CSV Generator → MinIO (Storage) → Airflow (ETL) → PostgreSQL (Database) �
 ```bash
 # 1. Clone the repository
 git clone <repo-url>
-cd <repo-name>
+cd Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart
 
-# 2. Set up environment variables
-cp .env.example .env
+# 2. Start all services
+docker compose up -d --build
 
-# 3. Start all services
-docker compose up -d
-
-# 4. Wait for services to initialize (~2 minutes)
+# 3. Wait for services to initialize (~2 minutes)
 docker compose ps
 
-# 5. Access the services (see table below)
+# 4. Access the services (see table below)
 ```
 
-## Services & Ports
+## Services & Credentials
 
-| Service         | URL                          | Default Credentials         |
-|-----------------|------------------------------|-----------------------------|
-| Airflow UI      | http://localhost:8080        | admin / admin               |
-| Metabase        | http://localhost:3000        | Set up on first visit       |
-| MinIO Console   | http://localhost:9003        | minioadmin / changeme123    |
-| PostgreSQL      | localhost:5434               | dataplatform / changeme     |
+| Service         | URL                          | Credentials             |
+|-----------------|------------------------------|------------------------|
+| Airflow UI      | http://localhost:8080        | admin / airflow        |
+| Metabase        | http://localhost:3000        | Set up on first visit  |
+| MinIO Console   | http://localhost:9003        | minio / minio123       |
+| PostgreSQL      | localhost:5433               | airflow / airflow      |
 
 ## Project Structure
 
 ```
 .
 ├── .github/workflows/       # CI/CD pipeline definitions
-├── dags/                    # Airflow DAG definitions
-├── data/sample/             # Generated sample CSV files
-├── docker/
-│   ├── airflow/             # Custom Airflow Dockerfile
-│   └── data-generator/      # Data generator Dockerfile
-├── scripts/                 # Utility & bootstrap scripts
-├── dashboards/              # Metabase export configs
-├── docs/
-│   ├── architecture/        # Architecture diagrams
-│   └── screenshots/         # Dashboard screenshots
-├── docker-compose.yml       # All services definition
-├── .env.example             # Environment variable template
-├── .gitignore
+├── dags/                   # Airflow DAG definitions
+├── data/                   # Data storage (local)
+├── docs/                   # Documentation
+│   └── architecture.md     # Architecture diagrams
+├── scripts/                # Utility scripts
+│   ├── data_generator/     # Parquet data generator
+│   ├── init-db.sh         # Database initialization
+│   └── init-minio.sh      # MinIO bucket setup
+├── sql/                    # SQL schemas
+│   ├── silver/            # Silver layer tables
+│   └── gold/              # Gold layer tables
+├── dashboards/             # Metabase configurations
+├── docker-compose.yml      # All services definition
+├── Dockerfile             # Airflow custom image
+├── requirements.txt        # Python dependencies
+├── .env                   # Environment variables
 └── README.md
 ```
 
+## Data Flow
+
+1. **Generate** - Data generator creates Parquet files
+2. **Ingest** - Files uploaded to MinIO (Bronze layer)
+3. **Process** - Airflow + DuckDB validates and transforms
+4. **Store** - Cleaned data in Silver, aggregations in Gold
+5. **Visualize** - Metabase queries Gold tables
+
 ## Running the Pipeline
 
-<!-- TODO: Add step-by-step pipeline instructions in Phase 4 -->
-
 ```bash
-# Generate sample data
-docker compose run --rm data-generator
+# Generate and upload data to MinIO
+docker compose exec airflow-worker python scripts/data_generator/generator.py
 
-# Trigger the ETL pipeline (or wait for scheduled run)
-# Open Airflow UI → DAGs → sales_etl_pipeline → Trigger
-
-# View dashboards
-# Open Metabase at http://localhost:3000
+# Trigger DAGs via Airflow UI at http://localhost:8080
 ```
-
-## Dashboard Screenshots
-
-<!-- TODO: Add screenshots in Phase 5 -->
 
 ## CI/CD Pipeline
 
-<!-- TODO: Add CI/CD workflow descriptions in Phase 6 -->
+The project includes GitHub Actions workflows for:
+- Building Docker images on every commit
+- Running unit and schema tests
+- Deploying to test environment
+- Validating data flow through all components
 
 ## Contributing
 
