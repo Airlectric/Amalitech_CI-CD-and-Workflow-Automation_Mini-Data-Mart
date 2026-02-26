@@ -15,9 +15,15 @@ MINIO_CONFIG = {
 
 class DuckDBValidator:
     def __init__(self, minio_config: Dict[str, Any] = None):
-        self.conn = duckdb.connect()
         self.minio_config = minio_config or MINIO_CONFIG
-        self._setup_httpfs()
+        self.conn = None
+    
+    def _get_connection(self):
+        """Get DuckDB connection with httpfs configured"""
+        if self.conn is None:
+            self.conn = duckdb.connect()
+            self._setup_httpfs()
+        return self.conn
     
     def _setup_httpfs(self):
         """Setup httpfs extension for S3/MinIO access"""
@@ -30,7 +36,7 @@ class DuckDBValidator:
                 SET s3_access_key_id='{self.minio_config['access_key']}';
                 SET s3_secret_access_key='{self.minio_config['secret_key']}';
                 SET s3_use_ssl={str(self.minio_config['use_ssl']).lower()};
-                SET s3_path_style=true;
+                SET s3_url_style='path';
             """)
             logger.info("DuckDB httpfs configured for MinIO")
         except Exception as e:
@@ -39,7 +45,52 @@ class DuckDBValidator:
     def close(self):
         if self.conn:
             self.conn.close()
+            self.conn = None
     
+    def read_parquet_from_minio(self, bucket: str, key_pattern: str) -> pd.DataFrame:
+        """
+        Read Parquet files DIRECTLY from MinIO using DuckDB schema-on-read.
+        This queries MinIO without downloading the full file first.
+        """
+        conn = self._get_connection()
+        query = f"""
+            SELECT * FROM read_parquet('s3://{bucket}/{key_pattern}')
+        """
+        try:
+            result = conn.execute(query)
+            df = result.df()
+            logger.info(f"Read {len(df)} rows from s3://{bucket}/{key_pattern}")
+            return df
+        except Exception as e:
+            logger.error(f"Failed to read from MinIO: {e}")
+            return pd.DataFrame()
+    
+    def query_minio_parquet(self, bucket: str, key_pattern: str, 
+                           columns: List[str] = None,
+                           where_clause: str = None,
+                           group_by: List[str] = None) -> pd.DataFrame:
+        """
+        Execute SQL query directly on Parquet files in MinIO.
+        This is TRUE schema-on-read - no download needed.
+        """
+        conn = self._get_connection()
+        
+        col_str = ", ".join(columns) if columns else "*"
+        query = f"SELECT {col_str} FROM read_parquet('s3://{bucket}/{key_pattern}')"
+        
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        
+        if group_by:
+            query += f" GROUP BY {', '.join(group_by)}"
+        
+        try:
+            result = conn.execute(query)
+            return result.df()
+        except Exception as e:
+            logger.error(f"Query failed: {e}")
+            return pd.DataFrame()
+
     def list_parquet_files(self, bucket: str, prefix: str = "") -> List[str]:
         """List all Parquet files in a MinIO bucket/prefix"""
         query = f"""

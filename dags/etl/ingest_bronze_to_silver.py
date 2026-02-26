@@ -95,9 +95,15 @@ with DAG(
 
                 pg_hook.update_metadata(file_key, "sales", "PROCESSING", 0)
 
-                logger.info(f"Reading {file_key} with MinIO hook...")
+                logger.info(f"Reading {file_key} with DuckDB schema-on-read...")
                 
-                df = minio_hook.read_parquet(file_key)
+                parts = file_key.split("/")
+                prefix = "/".join(parts[:-1]) + "/*.parquet" if len(parts) > 1 else "*.parquet"
+                
+                df = duckdb_validator.read_parquet_from_minio(
+                    bucket=BRONZE_BUCKET,
+                    key_pattern=prefix
+                )
                 
                 if df.empty:
                     logger.warning(f"No data read from {file_key}")

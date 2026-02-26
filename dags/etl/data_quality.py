@@ -4,6 +4,8 @@ from typing import Dict, List, Any
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
+from airflow.operators.python import BranchPythonOperator
+from airflow.operators.email import EmailOperator
 
 import sys
 sys.path.insert(0, "/opt/airflow/dags")
@@ -40,6 +42,7 @@ default_args = {
     "email_on_retry": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    "email": ["daniel.doe@amalitech.com"],
 }
 
 
@@ -156,6 +159,7 @@ with DAG(
         total_checks = 0
         passed_checks = 0
         failed_checks = 0
+        failed_details = []
 
         for result in check_results:
             if "results" in result:
@@ -165,14 +169,26 @@ with DAG(
                         passed_checks += 1
                     else:
                         failed_checks += 1
+                        failed_details.append({
+                            "table": result.get("table", "unknown"),
+                            "column": col,
+                            "check": check_result.get("check", "unknown"),
+                            "details": check_result
+                        })
 
-        return {
+        report = {
             "total_checks": total_checks,
             "passed": passed_checks,
             "failed": failed_checks,
             "pass_rate": passed_checks / total_checks if total_checks > 0 else 0,
-            "details": check_results
+            "details": check_results,
+            "failed_details": failed_details
         }
+
+        if failed_checks > 0:
+            raise ValueError(f"Data quality checks failed: {failed_checks} out of {total_checks} checks failed. Failed details: {failed_details}")
+
+        return report
 
     table_exists = check_table_exists()
 
@@ -189,4 +205,19 @@ with DAG(
 
     report = generate_quality_report(all_checks)
 
+    send_failure_email = EmailOperator(
+        task_id="send_failure_email",
+        to="daniel.doe@amalitech.com",
+        subject="Data Quality Check Failed - {{ ds }}",
+        html_content="""
+            <h3>Data Quality Check Failed</h3>
+            <p><strong>Date:</strong> {{ ds }}</p>
+            <p><strong>DAG:</strong> data_quality_checks</p>
+            <p>The data quality checks have failed. Please review the quality report in Airflow.</p>
+            <p>Check the DAG logs for detailed failure information.</p>
+        """,
+        trigger_rule="all_failed",
+    )
+
     table_exists >> all_checks >> report
+    report >> send_failure_email

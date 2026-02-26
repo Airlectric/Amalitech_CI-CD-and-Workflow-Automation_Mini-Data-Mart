@@ -3,6 +3,7 @@ from typing import Optional
 
 from airflow import DAG
 from airflow.decorators import task
+from airflow.sensors.external_task import ExternalTaskSensor
 
 import sys
 sys.path.insert(0, "/opt/airflow/dags")
@@ -17,10 +18,11 @@ GOLD_SCHEMA = "gold"
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    "email_on_failure": False,
+    "email_on_failure": True,
     "email_on_retry": False,
     "retries": 3,
     "retry_delay": timedelta(minutes=5),
+    "email": ["daniel.doe@amalitech.com"],
 }
 
 
@@ -34,6 +36,16 @@ with DAG(
     tags=["etl", "silver", "gold", "star-schema", "aggregation"],
     description="Build star schema: Silver dimensions → Gold facts"
 ) as dag:
+
+    wait_for_quality_checks = ExternalTaskSensor(
+        task_id="wait_for_quality_checks",
+        external_dag_id="data_quality_checks",
+        external_task_id="generate_quality_report",
+        allowed_states=["success"],
+        failed_states=["failed", "upstream_failed"],
+        timeout=7200,
+        poke_interval=60,
+    )
 
     @task
     def populate_silver_customers():
@@ -347,6 +359,7 @@ with DAG(
         return {"table": "category_insights", "status": "completed"}
 
     # Star Schema: Dimension tables first, then Fact tables
+    # Quality gate must pass before any ETL tasks run
     customers = populate_silver_customers()
     products = populate_silver_products()
     
@@ -357,5 +370,12 @@ with DAG(
     customer_analytics = aggregate_customer_analytics()
     category_insights = aggregate_category_insights()
 
-    # Set dependencies: dimensions → facts
-    [customers, products] >> [daily_sales, product_perf, store_perf, customer_analytics, category_insights]
+    # Set dependencies: quality gate must pass first, then dimensions before facts
+    wait_for_quality_checks >> [customers, products]
+    customers.set_upstream(wait_for_quality_checks)
+    products.set_upstream(wait_for_quality_checks)
+    daily_sales.set_upstream([customers, products])
+    product_perf.set_upstream([customers, products])
+    store_perf.set_upstream([customers, products])
+    customer_analytics.set_upstream([customers, products])
+    category_insights.set_upstream([customers, products])
