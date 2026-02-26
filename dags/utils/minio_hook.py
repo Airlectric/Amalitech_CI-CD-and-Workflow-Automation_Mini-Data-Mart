@@ -56,10 +56,12 @@ class MinIOHook(S3Hook):
         engine: str = "pyarrow"
     ):
         import pandas as pd
+        from io import BytesIO
 
         s3_client = self.get_conn()
         response = s3_client.get_object(Bucket=self.bucket_name, Key=key)
-        return pd.read_parquet(response["Body"], engine=engine)
+        body = response["Body"].read()
+        return pd.read_parquet(BytesIO(body), engine=engine)
 
     def get_file_metadata(self, key: str) -> dict:
         s3_client = self.get_conn()

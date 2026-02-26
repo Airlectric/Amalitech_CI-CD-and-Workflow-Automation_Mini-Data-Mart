@@ -7,11 +7,11 @@ import uuid
 import hashlib
 from io import BytesIO
 import sys
-import os
 
-if __name__ != "__main__":
-    os.chdir('/opt/airflow')
-    sys.path.insert(0, '/opt/airflow/scripts')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
+sys.path.insert(0, '/opt/airflow')
+sys.path.insert(0, '/opt/airflow/scripts')
 
 from log_utils import get_logger, StructuredLogger
 
@@ -122,7 +122,7 @@ def save_to_parquet_local(df: pd.DataFrame, output_path: str) -> str:
 
 
 def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str, 
-                    minio_client, ingest_date: str = None) -> dict:
+                    s3_client, ingest_date: str = None) -> dict:
     """
     Upload parquet to MinIO with proper path convention.
     
@@ -145,12 +145,11 @@ def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str,
     
     checksum = compute_checksum(df)
     
-    minio_client.put_object(
-        bucket_name=bucket,
-        object_name=f"{dataset_name}/ingest_date={ingest_date}/{filename}",
-        data=buffer,
-        length=buffer.getbuffer().nbytes,
-        content_type="application/parquet"
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=f"{dataset_name}/ingest_date={ingest_date}/{filename}",
+        Body=buffer.getvalue(),
+        ContentType="application/parquet"
     )
     
     logger.info("Upload complete", path=s3_path, rows=len(df), checksum=checksum[:8])
@@ -168,7 +167,7 @@ def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str,
 def generate_batch_to_minio(batch_size: int = 1000, num_batches: int = 1,
                             dataset_name: str = "sales",
                             bucket: str = "bronze",
-                            minio_client=None,
+                            s3_client=None,
                             ingest_date: str = None) -> list[dict]:
     """
     Generate parquet files and upload to MinIO.
@@ -186,7 +185,7 @@ def generate_batch_to_minio(batch_size: int = 1000, num_batches: int = 1,
             df=df,
             bucket=bucket,
             dataset_name=dataset_name,
-            minio_client=minio_client,
+            s3_client=s3_client,
             ingest_date=ingest_date
         )
         
@@ -226,13 +225,12 @@ if __name__ == "__main__":
     
     logger.info("Starting data generator")
     
-    minio_endpoint = os.getenv("MINIO_ROOT_USER", "minio") + ":" + os.getenv("MINIO_API_PORT", "9002")
-    
+    # Use internal Docker network address
     s3_client = boto3.client(
         's3',
-        endpoint_url=f"http://{minio_endpoint}",
-        aws_access_key_id=os.getenv("MINIO_ROOT_USER", "minio"),
-        aws_secret_access_key=os.getenv("MINIO_ROOT_PASSWORD", "minio123"),
+        endpoint_url="http://minio:9000",
+        aws_access_key_id="minio",
+        aws_secret_access_key="minio123",
     )
     
     files = generate_batch_to_minio(
@@ -240,7 +238,7 @@ if __name__ == "__main__":
         num_batches=1,
         dataset_name="sales",
         bucket="bronze",
-        minio_client=s3_client
+        s3_client=s3_client
     )
     
     logger.info("Data generation complete", files_generated=len(files))

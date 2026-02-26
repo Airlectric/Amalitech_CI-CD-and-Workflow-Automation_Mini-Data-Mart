@@ -27,7 +27,7 @@ default_args = {
 with DAG(
     dag_id="silver_to_gold",
     start_date=datetime(2026, 1, 1),
-    schedule_interval="0 */6 * * *",
+    schedule="0 */6 * * *",
     default_args=default_args,
     catchup=False,
     max_active_runs=1,

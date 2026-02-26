@@ -46,7 +46,7 @@ default_args = {
 with DAG(
     dag_id="data_quality_checks",
     start_date=datetime(2026, 1, 1),
-    schedule_interval="0 */3 * * *",
+    schedule="0 */3 * * *",
     default_args=default_args,
     catchup=False,
     max_active_runs=1,
