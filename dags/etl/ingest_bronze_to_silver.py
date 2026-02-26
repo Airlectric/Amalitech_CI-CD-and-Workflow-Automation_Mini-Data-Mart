@@ -28,6 +28,11 @@ DATASET_SPECS = {
         ],
         "required_columns": ["transaction_id", "sale_date", "product_id", "quantity", "unit_price", "net_amount"],
         "unique_columns": ["transaction_id"],
+        "value_ranges": {
+            "quantity": {"min": 1, "max": 1000},
+            "unit_price": {"min": 0, "max": 100000},
+            "discount_percentage": {"min": 0, "max": 100}
+        },
         "silver_table": "sales"
     }
 }
@@ -55,18 +60,21 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["etl", "bronze", "silver", "ingestion"],
-    description="Ingest data from Bronze (MinIO) to Silver (PostgreSQL) with validation"
+    description="Ingest data from Bronze (MinIO) to Silver (PostgreSQL) with DuckDB schema-on-read validation"
 ) as dag:
 
     @task
     def discover_and_ingest():
         import pandas as pd
         import logging
+        import os
 
         logger = logging.getLogger(__name__)
 
         minio_hook = MinIOHook(bucket_name=BRONZE_BUCKET)
         pg_hook = PostgresLayerHook()
+        
+        duckdb_validator = create_validator()
 
         files = minio_hook.list_files(prefix="", suffix=".parquet")
 
@@ -87,27 +95,45 @@ with DAG(
 
                 pg_hook.update_metadata(file_key, "sales", "PROCESSING", 0)
 
+                logger.info(f"Reading {file_key} with MinIO hook...")
+                
                 df = minio_hook.read_parquet(file_key)
+                
+                if df.empty:
+                    logger.warning(f"No data read from {file_key}")
+                    pg_hook.update_metadata(file_key, "sales", "FAILED", 0, error_message="No data found")
+                    continue
+                
                 logger.info(f"Read {len(df)} rows from {file_key}")
 
                 spec = get_dataset_spec("sales")
                 
-                actual_cols = set(df.columns)
-                expected_cols = set(spec.get("expected_columns", []))
-                if not expected_cols.issubset(actual_cols):
-                    missing = expected_cols - actual_cols
-                    error_msg = f"Missing columns: {missing}"
+                validation_result = duckdb_validator.run_full_validation(df, spec)
+                
+                if not validation_result["schema_valid"] or not validation_result["data_valid"]:
+                    error_msg = "; ".join(validation_result["errors"])
+                    logger.error(f"Validation failed: {error_msg}")
                     pg_hook.update_metadata(file_key, "sales", "FAILED", 0, error_message=error_msg)
                     errors.append(f"{file_key}: {error_msg}")
                     continue
 
-                logger.info("Schema validation passed")
+                logger.info("Schema-on-read validation passed")
 
                 df["is_weekend"] = df["is_weekend"].astype(bool)
                 df["is_holiday"] = df["is_holiday"].astype(bool)
                 df["ingest_date"] = datetime.now().date()
 
-                pg_hook.insert_dataframe(df, "sales", schema=SILVER_SCHEMA)
+                pg_hook.upsert_dataframe(
+                    df, 
+                    "sales", 
+                    schema=SILVER_SCHEMA,
+                    conflict_columns=["transaction_id"],
+                    update_columns=["sale_date", "sale_hour", "customer_id", "customer_name", "product_id", 
+                                   "product_name", "category", "sub_category", "quantity", "unit_price",
+                                   "discount_percentage", "discount_amount", "gross_amount", "net_amount",
+                                   "profit_margin", "payment_method", "payment_category", "store_location",
+                                   "region", "is_weekend", "is_holiday", "ingest_date"]
+                )
 
                 pg_hook.update_metadata(file_key, "sales", "PROCESSED", len(df))
                 processed_count += len(df)
@@ -119,6 +145,8 @@ with DAG(
                 logger.error(f"Error processing {file_key}: {e}\n{tb}")
                 pg_hook.update_metadata(file_key, "sales", "FAILED", 0, error_message=str(e))
                 errors.append(f"{file_key}: {str(e)}")
+
+        duckdb_validator.close()
 
         return {
             "records_processed": processed_count,

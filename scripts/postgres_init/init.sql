@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS silver.customers (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS silver.products (
+    product_id VARCHAR(50) PRIMARY KEY,
+    product_name VARCHAR(100),
+    category VARCHAR(50),
+    sub_category VARCHAR(50),
+    min_unit_price DECIMAL(10, 2),
+    max_unit_price DECIMAL(10, 2),
+    avg_unit_price DECIMAL(10, 2),
+    total_quantity_sold INTEGER DEFAULT 0,
+    total_revenue DECIMAL(15, 2) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_silver_date ON silver.sales(sale_date);
 CREATE INDEX IF NOT EXISTS idx_silver_customer ON silver.sales(customer_id);
 CREATE INDEX IF NOT EXISTS idx_silver_product ON silver.sales(product_id);

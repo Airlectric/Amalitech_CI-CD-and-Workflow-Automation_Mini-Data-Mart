@@ -1,6 +1,6 @@
 # Mini Data Platform
 
-> A production-grade containerized data platform using Docker Compose that implements medallion architecture (Bronze Silver → Gold) with full → CI/CD automation.
+> A production-grade containerized data platform using Docker Compose that implements medallion architecture (Bronze → Silver → Gold) with Star Schema and CI/CD automation.
 
 ## Architecture
 
@@ -9,6 +9,104 @@ See [docs/architecture.md](docs/architecture/architecture.md) for detailed diagr
 ```
 Data Generator → MinIO (Bronze) → Airflow + DuckDB → PostgreSQL (Silver/Gold) → Metabase
 ```
+
+## Star Schema Design
+
+This platform implements a proper **Star Schema** for data warehousing.
+
+```mermaid
+erDiagram
+    SILVER_SALES {
+        int sale_id PK
+        string transaction_id UK
+        date sale_date
+        int sale_hour
+        string customer_id FK
+        string product_id FK
+        string store_location FK
+        int quantity
+        decimal unit_price
+        decimal net_amount
+    }
+    SILVER_CUSTOMERS {
+        string customer_id PK
+        string customer_name
+        date first_purchase_date
+        int total_purchases
+        decimal total_revenue
+        string customer_segment
+    }
+    SILVER_PRODUCTS {
+        string product_id PK
+        string product_name
+        string category
+        string sub_category
+    }
+    GOLD_DAILY_SALES {
+        date sale_date PK
+        int total_transactions
+        int total_quantity_sold
+        decimal gross_revenue
+        decimal net_revenue
+    }
+    GOLD_PRODUCT_PERFORMANCE {
+        string product_id PK
+        string product_name
+        string category
+        decimal total_revenue
+    }
+    GOLD_CUSTOMER_ANALYTICS {
+        string customer_id PK
+        string customer_name
+        int total_purchases
+        decimal total_revenue
+        string customer_tier
+    }
+    GOLD_STORE_PERFORMANCE {
+        string store_location PK
+        string region
+        decimal total_revenue
+    }
+    GOLD_CATEGORY_INSIGHTS {
+        string category PK
+        int total_products_sold
+        decimal total_revenue
+    }
+
+    SILVER_SALES }o--|| SILVER_CUSTOMERS : "customer_id"
+    SILVER_SALES }o--|| SILVER_PRODUCTS : "product_id"
+```
+
+### All Tables
+
+#### Silver Layer (Schema: `silver`)
+
+| Table | Type | Description |
+|-------|------|-------------|
+| `sales` | Fact | Transaction records |
+| `customers` | Dimension | Customer profiles |
+| `products` | Dimension | Product catalog |
+
+#### Gold Layer (Schema: `gold`)
+
+| Table | Type | Primary Key | Description |
+|-------|------|-------------|-------------|
+| `daily_sales` | Fact | `sale_date` | Daily aggregated metrics |
+| `product_performance` | Fact | `product_id` | Product analytics |
+| `customer_analytics` | Fact | `customer_id` | Customer behavior |
+| `store_performance` | Fact | `store_location` | Store metrics |
+| `category_insights` | Fact | `category` | Category aggregates |
+| `v_monthly_sales` | View | — | Monthly aggregated view |
+| `v_regional_sales` | View | — | Regional sales view |
+
+### Customer Segmentation
+
+| Tier | Revenue Threshold |
+|------|------------------|
+| Bronze | < $1,000 |
+| Silver | $1,000 - $5,000 |
+| Gold | $5,000 - $10,000 |
+| Platinum | > $10,000 |
 
 ## Tech Stack
 
@@ -47,7 +145,7 @@ docker compose ps
 
 | Service         | URL                          | Credentials             |
 |-----------------|------------------------------|------------------------|
-| Airflow UI      | http://localhost:8080        | admin / airflow (set via .env, FABAuthManager) |
+| Airflow UI      | http://localhost:8080        | admin / airflow        |
 | Metabase        | http://localhost:3000        | Set up on first visit  |
 | MinIO Console   | http://localhost:9003        | minio / minio123       |
 | PostgreSQL      | localhost:5433               | airflow / airflow      |
@@ -58,17 +156,21 @@ docker compose ps
 .
 ├── .github/workflows/       # CI/CD pipeline definitions
 ├── dags/                   # Airflow DAG definitions
+│   ├── etl/
+│   │   ├── ingest_bronze_to_silver.py   # Bronze → Silver
+│   │   ├── silver_to_gold.py             # Silver → Gold (Star Schema)
+│   │   └── generate_sample_data.py      # Auto data generation
+│   └── utils/
+│       ├── minio_hook.py                # MinIO operations
+│       ├── postgres_hook.py             # PostgreSQL operations
+│       └── duckdb_utils.py              # DuckDB validation
 ├── data/                   # Data storage (local)
 ├── docs/                   # Documentation
 │   └── architecture.md     # Architecture diagrams
 ├── scripts/                # Utility scripts
-│   ├── data_generator/     # Parquet data generator
-│   ├── init-db.sh         # Database initialization
-│   └── init-minio.sh      # MinIO bucket setup
-├── sql/                    # SQL schemas
-│   ├── silver/            # Silver layer tables
-│   └── gold/              # Gold layer tables
-├── dashboards/             # Metabase configurations
+│   ├── data_generator/    # Parquet data generator
+│   ├── postgres_init/    # Database initialization
+│   └── init-minio.sh     # MinIO bucket setup
 ├── docker-compose.yml      # All services definition
 ├── Dockerfile             # Airflow custom image
 ├── requirements.txt        # Python dependencies
@@ -76,21 +178,95 @@ docker compose ps
 └── README.md
 ```
 
-## Data Flow
+## Data Flow & Pipelines
 
-1. **Generate** - Data generator creates Parquet files
-2. **Ingest** - Files uploaded to MinIO (Bronze layer)
-3. **Process** - Airflow + DuckDB validates and transforms
-4. **Store** - Cleaned data in Silver, aggregations in Gold
-5. **Visualize** - Metabase queries Gold tables
+```mermaid
+flowchart TD
+    A[Data Generator] -->|Parquet Files| B[MinIO Bronze]
+    B -->|6hrs| C[ingest_bronze_to_silver]
+    C -->|DuckDB Validation| D[PostgreSQL Silver]
+    D -->|Star Schema Build| E[silver.customers]
+    D -->|Star Schema Build| F[silver.products]
+    D -->|6hrs| G[silver_to_gold]
+    G -->|Aggregations| H[gold.daily_sales]
+    G -->|Aggregations| I[gold.product_performance]
+    G -->|Aggregations| J[gold.customer_analytics]
+    G -->|Aggregations| K[gold.store_performance]
+    G -->|Aggregations| L[gold.category_insights]
+    H --> M[Metabase Dashboards]
+    I --> M
+    J --> M
+    K --> M
+    L --> M
+```
+
+### DAGs & Scheduling
+
+| DAG | Schedule | Description |
+|-----|----------|-------------|
+| `generate_sample_data` | 6am, 12pm, 6pm | Generates 1000 rows to MinIO |
+| `ingest_bronze_to_silver` | Every 6 hours | Loads Bronze → Silver with validation |
+| `silver_to_gold` | Every 6 hours | Builds Star Schema (dimensions + facts) |
+
+## Database Schema
+
+### Silver Layer
+
+**Fact Table: `silver.sales`**
+| Column | Type | Description |
+|--------|------|-------------|
+| sale_id | SERIAL | Primary key |
+| transaction_id | VARCHAR(50) | Unique transaction ID |
+| sale_date | DATE | Date of sale |
+| customer_id | VARCHAR(50) | FK to customers |
+| product_id | VARCHAR(50) | FK to products |
+| quantity | INTEGER | Units sold |
+| net_amount | DECIMAL | Revenue after discount |
+| ... | ... | Other sales fields |
+
+**Dimension Table: `silver.customers`**
+| Column | Type | Description |
+|--------|------|-------------|
+| customer_id | VARCHAR(50) | Primary key |
+| customer_name | VARCHAR(100) | Full name |
+| first_purchase_date | DATE | First transaction |
+| total_purchases | INTEGER | Transaction count |
+| total_revenue | DECIMAL | Lifetime value |
+| customer_segment | VARCHAR(20) | Bronze/Silver/Gold/Platinum |
+
+**Dimension Table: `silver.products`**
+| Column | Type | Description |
+|--------|------|-------------|
+| product_id | VARCHAR(50) | Primary key |
+| product_name | VARCHAR(100) | Product name |
+| category | VARCHAR(50) | Product category |
+| min/max/avg_unit_price | DECIMAL | Price statistics |
+| total_quantity_sold | INTEGER | Units sold |
+| total_revenue | DECIMAL | Total revenue |
+
+### Gold Layer
+
+| Table | Primary Key | Description |
+|-------|-------------|-------------|
+| daily_sales | sale_date | Daily aggregated metrics |
+| product_performance | product_id | Product-level analytics |
+| customer_analytics | customer_id | Customer behavior analysis |
+| store_performance | store_location | Store-level metrics |
+| category_insights | category | Category aggregates |
 
 ## Running the Pipeline
 
 ```bash
-# Generate and upload data to MinIO
+# Generate and upload data to MinIO (or wait for scheduled run)
 docker compose exec airflow-worker python scripts/data_generator/generator.py
 
 # Trigger DAGs via Airflow UI at http://localhost:8080
+# Or via CLI:
+docker compose exec airflow-worker airflow dags trigger ingest_bronze_to_silver
+docker compose exec airflow-worker airflow dags trigger silver_to_gold
+
+# Verify data
+docker compose exec postgres psql -U airflow -d airflow -c "SELECT COUNT(*) FROM silver.sales"
 ```
 
 ## CI/CD Pipeline

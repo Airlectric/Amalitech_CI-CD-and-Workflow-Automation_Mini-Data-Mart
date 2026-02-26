@@ -135,3 +135,46 @@ class PostgresLayerHook(PostgresHook):
     def truncate_table(self, table: str, schema: str = "silver"):
         query = f"TRUNCATE TABLE {schema}.{table} RESTART IDENTITY CASCADE"
         self.execute_query(query)
+
+    def upsert_dataframe(
+        self,
+        df,
+        table: str,
+        schema: str = "silver",
+        conflict_columns: List[str] = None,
+        update_columns: List[str] = None
+    ):
+        if df.empty:
+            return 0
+        
+        full_table = f"{schema}.{table}"
+        
+        if conflict_columns is None:
+            conflict_columns = ["transaction_id"]
+        
+        columns = list(df.columns)
+        
+        if update_columns is None:
+            update_columns = [c for c in columns if c not in conflict_columns]
+        
+        col_names = ",".join(columns)
+        placeholders = ",".join(["%s"] * len(columns))
+        
+        insert_sql = f"INSERT INTO {full_table} ({col_names}) VALUES ({placeholders})"
+        
+        if update_columns:
+            update_set = ",".join([f"{c} = EXCLUDED.{c}" for c in update_columns])
+            upsert_sql = insert_sql + f" ON CONFLICT ({','.join(conflict_columns)}) DO UPDATE SET {update_set}"
+        else:
+            upsert_sql = insert_sql + f" ON CONFLICT ({','.join(conflict_columns)}) DO NOTHING"
+        
+        conn = self.get_conn()
+        cursor = conn.cursor()
+        try:
+            records = [tuple(row[col] for col in columns) for row in df.to_dict('records')]
+            cursor.executemany(upsert_sql, records)
+            conn.commit()
+            return len(df)
+        finally:
+            cursor.close()
+            conn.close()
