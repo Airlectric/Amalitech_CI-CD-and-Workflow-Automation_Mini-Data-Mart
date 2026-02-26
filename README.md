@@ -185,19 +185,20 @@ flowchart TD
     A[Data Generator] -->|Parquet Files| B[MinIO Bronze]
     B -->|6hrs| C[ingest_bronze_to_silver]
     C -->|DuckDB Validation| D[PostgreSQL Silver]
-    D -->|Star Schema Build| E[silver.customers]
-    D -->|Star Schema Build| F[silver.products]
-    D -->|6hrs| G[silver_to_gold]
-    G -->|Aggregations| H[gold.daily_sales]
-    G -->|Aggregations| I[gold.product_performance]
-    G -->|Aggregations| J[gold.customer_analytics]
-    G -->|Aggregations| K[gold.store_performance]
-    G -->|Aggregations| L[gold.category_insights]
-    H --> M[Metabase Dashboards]
-    I --> M
-    J --> M
-    K --> M
-    L --> M
+    D -->|Load| E[silver.sales]
+    E -->|Build| F[silver.customers]
+    E -->|Build| G[silver.products]
+    E -->|6hrs| H[silver_to_gold]
+    H -->|Aggregations| I[gold.daily_sales]
+    H -->|Aggregations| J[gold.product_performance]
+    H -->|Aggregations| K[gold.customer_analytics]
+    H -->|Aggregations| L[gold.store_performance]
+    H -->|Aggregations| M[gold.category_insights]
+    I --> N[Metabase Dashboards]
+    J --> N
+    K --> N
+    L --> N
+    M --> N
 ```
 
 ### DAGs & Scheduling
