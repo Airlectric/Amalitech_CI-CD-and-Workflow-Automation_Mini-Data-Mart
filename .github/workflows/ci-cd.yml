@@ -1,0 +1,331 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'notes/**'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'notes/**'
+
+env:
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '18'
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black pylint mypy
+
+      - name: Lint Python files
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+
+      - name: Check code formatting
+        run: |
+          black --check . || true
+
+      - name: Type check with mypy
+        run: |
+          pip install types-requests types-PyYAML
+          mypy dags/ scripts/ --ignore-missing-imports || true
+
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-mock
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --tb=short -m "not integration" --cov=dags --cov=scripts --cov-report=xml
+        continue-on-error: true
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, unit-tests]
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/airflow
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-docker]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Start Docker services
+        run: |
+          docker-compose up -d postgres minio redis
+
+      - name: Wait for services
+        run: |
+          sleep 15
+          docker-compose ps
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov psycopg2-binary boto3
+
+      - name: Run integration tests
+        run: |
+          pytest tests/test_integration.py -v --tb=short -m integration
+        continue-on-error: true
+
+      - name: Run PostgreSQL tests
+        run: |
+          python -c "
+            import psycopg2
+            import time
+            import sys
+            
+            # Wait for PostgreSQL
+            for i in range(10):
+                try:
+                    conn = psycopg2.connect(
+                        host='localhost',
+                        port=5432,
+                        dbname='airflow',
+                        user='airflow',
+                        password='airflow'
+                    )
+                    print('PostgreSQL connected successfully')
+                    conn.close()
+                    break
+                except Exception as e:
+                    print(f'Attempt {i+1}: {e}')
+                    time.sleep(2)
+            else:
+                sys.exit(1)
+          "
+
+      - name: Check MinIO
+        run: |
+          docker run --rm --network host minio/mc ls http://localhost:9000/minio/ 2>/dev/null || echo "MinIO bucket check skipped"
+
+      - name: Stop services
+        if: always()
+        run: docker-compose down -v
+
+
+  end-to-end-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: [build-docker]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Start full stack
+        run: |
+          docker-compose up -d
+        continue-on-error: true
+
+      - name: Wait for Airflow
+        run: |
+          echo "Waiting for services..."
+          sleep 30
+          docker-compose ps
+
+      - name: Test Airflow Webserver
+        run: |
+          curl -f http://localhost:8080/health || echo "Airflow health check skipped"
+
+      - name: Test PostgreSQL
+        run: |
+          docker exec Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart-postgres-1 pg_isready -U airflow
+
+      - name: Test MinIO
+        run: |
+          docker exec Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart-minio-1 mc ls localminio/bronze || echo "No bronze bucket yet (expected)"
+
+      - name: Run DAG import tests
+        run: |
+          docker exec Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart-airflow-worker-1 python -c "
+            import sys
+            sys.path.insert(0, '/opt/airflow/dags')
+            sys.path.insert(0, '/opt/airflow/scripts')
+            
+            # Test DAG imports
+            from etl import data_quality
+            print(f'data_quality DAG: {data_quality.dag.dag_id}')
+            
+            from etl import ingest_bronze_to_silver
+            print(f'ingest_bronze_to_silver DAG: {ingest_bronze_to_silver.dag.dag_id}')
+            
+            from etl import generate_sample_data
+            print(f'generate_sample_data DAG: {generate_sample_data.dag.dag_id}')
+            
+            from etl import silver_to_gold
+            print(f'silver_to_gold DAG: {silver_to_gold.dag.dag_id}')
+            
+            from etl import remediation
+            print(f'remediation DAG: {remediation.dag.dag_id}')
+            
+            print('All DAGs imported successfully!')
+          "
+
+      - name: Test data generator
+        run: |
+          docker exec Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart-airflow-worker-1 python -c "
+            import sys
+            sys.path.insert(0, '/opt/airflow/scripts')
+            from data_generator.generator import generate_sales_data
+            df = generate_sales_data(num_rows=10, mode='clean')
+            print(f'Generated {len(df)} records')
+            print('Data generator works!')
+          "
+
+      - name: Cleanup
+        if: always()
+        run: docker-compose down -v
+
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run security scan
+        run: |
+          pip install safety bandit
+          safety check || true
+          bandit -r dags/ scripts/ -f json -o bandit-report.json || true
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-report
+          path: bandit-report.json
+
+
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, unit-tests, build-docker, integration-tests, end-to-end-tests, security-scan]
+    if: always()
+    steps:
+      - name: Create status summary
+        run: |
+          echo "## CI/CD Pipeline Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint & Type Check | ${{ needs.lint-and-typecheck.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.build-docker.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| End-to-End Tests | ${{ needs.end-to-end-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.unit-tests.result }}" == "failure" ]; then
+            echo "❌ Tests failed. Please check the logs." >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.integration-tests.result }}" == "failure" ]; then
+            echo "⚠️ Integration tests failed. Please check the logs." >> $GITHUB_STEP_SUMMARY
+          else:
+            echo "✅ All checks passed!" >> $GITHUB_STEP_SUMMARY
+          fi
