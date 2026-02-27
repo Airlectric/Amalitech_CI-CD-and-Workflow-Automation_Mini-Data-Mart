@@ -1,4 +1,5 @@
 import os
+import json
 from typing import List, Optional, Any
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -178,3 +179,72 @@ class PostgresLayerHook(PostgresHook):
         finally:
             cursor.close()
             conn.close()
+
+    def insert_quarantine(
+        self,
+        records: List[dict],
+        table: str,
+        schema: str = "quarantine",
+        run_id: str = None
+    ) -> int:
+        """Insert bad records into quarantine table"""
+        if not records:
+            return 0
+        
+        full_table = f"{schema}.{table}"
+        
+        conn = self.get_conn()
+        cursor = conn.cursor()
+        
+        inserted = 0
+        try:
+            for record in records:
+                payload_json = json.dumps(record.get("payload", {}))
+                cursor.execute(f"""
+                    INSERT INTO {full_table}
+                    (id, payload, error_reason, source_file, ingestion_run_id, failed_at)
+                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (ingestion_run_id, id) DO NOTHING
+                """, (
+                    record.get("id", 0),
+                    payload_json,
+                    record.get("error_reason", "unknown"),
+                    record.get("source_file", ""),
+                    run_id
+                ))
+                inserted += cursor.rowcount
+            
+            conn.commit()
+            return inserted
+        finally:
+            cursor.close()
+            conn.close()
+
+    def update_audit_run(
+        self,
+        run_id: str,
+        rows_read: int = 0,
+        rows_written_silver: int = 0,
+        rows_quarantined: int = 0,
+        status: str = "COMPLETED",
+        files_scanned: List[str] = None
+    ):
+        """Update audit.ingestion_runs with final counts"""
+        query = """
+            UPDATE audit.ingestion_runs
+            SET finished_at = CURRENT_TIMESTAMP,
+                rows_read = %s,
+                rows_written_silver = %s,
+                rows_quarantined = %s,
+                status = %s,
+                files_scanned = %s
+            WHERE ingestion_run_id = %s
+        """
+        self.execute_query(query, (
+            rows_read,
+            rows_written_silver,
+            rows_quarantined,
+            status,
+            files_scanned,
+            run_id
+        ))
