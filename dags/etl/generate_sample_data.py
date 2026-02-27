@@ -7,8 +7,8 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 import sys
-sys.path.insert(0, "/opt/airflow/dags")
 sys.path.insert(0, "/opt/airflow/scripts")
+sys.path.insert(0, "/opt/airflow/dags")
 
 from utils.minio_hook import MinIOHook
 from data_generator.generator import generate_sales_data

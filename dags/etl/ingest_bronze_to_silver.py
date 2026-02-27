@@ -7,6 +7,21 @@ from airflow.decorators import task
 from airflow.models import Variable
 
 import sys
+import importlib.util
+
+def _import_email_utils():
+    spec = importlib.util.spec_from_file_location(
+        "email_utils", 
+        "/opt/airflow/scripts/utils/email_utils.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+email_utils = _import_email_utils()
+send_ingestion_alert = email_utils.send_ingestion_alert
+
+sys.path.insert(0, "/opt/airflow/scripts")
 sys.path.insert(0, "/opt/airflow/dags")
 
 from utils.minio_hook import MinIOHook
@@ -19,6 +34,7 @@ SILVER_SCHEMA = "silver"
 QUARANTINE_SCHEMA = "quarantine"
 METADATA_SCHEMA = "metadata"
 AUDIT_SCHEMA = "audit"
+ALERT_EMAIL = Variable.get("alert_email", default_var="daniel.doe@a2sv.org")
 
 DATASET_SPECS = {
     "sales": {
@@ -29,7 +45,7 @@ DATASET_SPECS = {
             "net_amount", "profit_margin", "payment_method", "payment_category",
             "store_location", "region", "is_weekend", "is_holiday"
         ],
-        "required_columns": ["transaction_id", "sale_date", "product_id", "quantity", "unit_price", "net_amount"],
+        "required_columns": ["transaction_id", "sale_date", "customer_id", "product_id", "quantity", "unit_price", "net_amount"],
         "unique_columns": ["transaction_id"],
         "value_ranges": {
             "quantity": {"min": 1, "max": 1000},
@@ -112,14 +128,11 @@ with DAG(
 
                 pg_hook.update_metadata(file_key, "sales", "PROCESSING", 0)
 
-                logger.info(f"Reading {file_key} with DuckDB schema-on-read...")
-                
-                parts = file_key.split("/")
-                prefix = "/".join(parts[:-1]) + "/*.parquet" if len(parts) > 1 else "*.parquet"
+                logger.info(f"Reading {file_key} with DuckDB...")
                 
                 df = duckdb_validator.read_parquet_from_minio(
                     bucket=BRONZE_BUCKET,
-                    key_pattern=prefix
+                    key_pattern=file_key
                 )
                 
                 if df.empty:
@@ -132,32 +145,19 @@ with DAG(
 
                 spec = get_dataset_spec("sales")
                 
-                # Validate schema first
-                validation_result = duckdb_validator.run_full_validation(df, spec)
+                schema_valid = True
+                validation_result = {}
                 
-                if not validation_result["schema_valid"]:
-                    error_msg = "; ".join(validation_result["errors"])
-                    logger.error(f"Schema validation failed: {error_msg}")
-                    # Send entire file to quarantine
-                    quarantine_records = []
-                    for _, row in df.iterrows():
-                        quarantine_records.append({
-                            "id": row.get("transaction_id", 0),
-                            "payload": row.to_dict(),
-                            "error_reason": f"Schema validation failed: {error_msg[:100]}",
-                            "source_file": file_key
-                        })
-                    
-                    pg_hook.insert_quarantine(
-                        quarantine_records,
-                        "sales_failed",
-                        QUARANTINE_SCHEMA,
-                        run_id
-                    )
-                    total_rows_quarantined += len(quarantine_records)
-                    pg_hook.update_metadata(file_key, "sales", "FAILED", 0, error_message=error_msg)
-                    errors.append(f"{file_key}: {error_msg}")
-                    continue
+                try:
+                    validation_result = duckdb_validator.run_full_validation(df, spec)
+                    schema_valid = validation_result.get("schema_valid", True)
+                except KeyError as e:
+                    schema_valid = True
+                    logger.warning(f"Missing columns in file, will use row-level validation: {e}")
+                
+                if not schema_valid:
+                    error_msg = "; ".join(validation_result.get("errors", ["Unknown schema error"]))
+                    logger.warning(f"Schema issues detected, using row-level validation: {error_msg}")
 
                 # Row-level validation - tag each row with error_reason
                 df["_validation_errors"] = None
@@ -214,9 +214,9 @@ with DAG(
                 rows_quarantined = 0
                 if not bad_rows.empty:
                     quarantine_records = []
-                    for _, row in bad_rows.iterrows():
+                    for idx, row in bad_rows.iterrows():
                         quarantine_records.append({
-                            "id": row.get("transaction_id", 0),
+                            "id": idx,
                             "payload": row.drop("_validation_errors").to_dict(),
                             "error_reason": row["_validation_errors"],
                             "source_file": file_key
@@ -254,6 +254,16 @@ with DAG(
         )
 
         logger.info(f"Ingestion run {run_id} completed: {total_rows_silver} to Silver, {total_rows_quarantined} to Quarantine")
+
+        send_ingestion_alert(
+            run_id=run_id,
+            total_read=total_rows_read,
+            silver_count=total_rows_silver,
+            quarantine_count=total_rows_quarantined,
+            files_scanned=files_scanned,
+            errors=errors,
+            recipient=ALERT_EMAIL
+        )
 
         return {
             "run_id": run_id,

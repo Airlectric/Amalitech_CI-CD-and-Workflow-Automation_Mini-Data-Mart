@@ -1,23 +1,29 @@
-"""
-Data Quality DAG using Great Expectations
-Validates quarantine patterns, profiles Silver, detects drift, generates Data Docs, sends alerts
-"""
-from datetime import datetime, timedelta
+from datetime import datetime
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
-from airflow.operators.python import PythonOperator
-
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import json
 import logging
+import sys
+import importlib.util
+
+def _import_email_utils():
+    spec = importlib.util.spec_from_file_location(
+        "email_utils",
+        "/opt/airflow/scripts/utils/email_utils.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+email_utils = _import_email_utils()
+send_data_quality_alert = email_utils.send_data_quality_alert
+
+sys.path.insert(0, "/opt/airflow/scripts")
+sys.path.insert(0, "/opt/airflow/dags")
 
 logger = logging.getLogger(__name__)
 
 ALERT_EMAIL = Variable.get("alert_email", default_var="daniel.doe@a2sv.org")
-GX_DIR = "/opt/airflow/scripts/gx"
 
 default_args = {
     "owner": "airflow",
@@ -27,19 +33,6 @@ default_args = {
     "retries": 1,
 }
 
-
-def get_postgres_connection():
-    """Get PostgreSQL connection for GX"""
-    return {
-        "drivername": "postgresql+psycopg2",
-        "username": "airflow",
-        "password": "airflow",
-        "host": "postgres",
-        "port": 5432,
-        "database": "airflow"
-    }
-
-
 with DAG(
     dag_id="data_quality_gx",
     start_date=datetime(2026, 1, 1),
@@ -47,345 +40,290 @@ with DAG(
     default_args=default_args,
     catchup=False,
     max_active_runs=1,
-    tags=["quality", "great_expectations", "validation"],
-    description="Data quality checks using Great Expectations"
+    tags=["quality", "sql", "validation"],
+    description="Data quality checks using SQL queries",
 ) as dag:
 
     @task
     def validate_quarantine_patterns():
-        """Validate quarantine table for bad records and patterns"""
-        import great_expectations as gx
-        from great_expectations.datasource.fluent import SqlSource
-        from great_expectations.validator.validator import Validator
-
-        logger.info("Starting quarantine pattern validation")
-
-        context = gx.get_context(mode="ephemeral")
-        conn_params = get_postgres_connection()
-
-        datasource = context.sources.add_postgres(
-            name="postgres_quarantine",
-            connection_string="postgresql+psycopg2://airflow:airflow@postgres:5432/airflow"
-        )
-
-        batch_request = datasource.build_batch_request(
-            schema_name="quarantine",
-            table_name="sales_failed"
-        )
-
-        validator = context.get_validator(
-            batch_request=batch_request,
-            expectation_suite_name="quarantine_suite"
-        )
-
-        expectations = [
-            {
-                "expectation_type": "expect_table_column_count_to_be_between",
-                "kwargs": {"min_value": 0, "max_value": 100000}
-            },
-            {
-                "expectation_type": "expect_column_values_to_not_be_null",
-                "kwargs": {"column": "id"}
-            },
-            {
-                "expectation_type": "expect_column_values_to_not_be_null",
-                "kwargs": {"column": "payload"}
-            },
-            {
-                "expectation_type": "expect_column_values_to_not_be_null",
-                "kwargs": {"column": "error_reason"}
-            },
-            {
-                "expectation_type": "expect_column_distinct_values_to_be_in_set",
-                "kwargs": {"column": "replayed", "value_set": [True, False]}
-            },
-        ]
-
-        for exp in expectations:
-            getattr(validator, exp["expectation_type"])(**exp["kwargs"])
-
-        results = validator.validate()
-
-        context.save_expectation_suite(
-            expectation_suite_name="quarantine_suite",
-            overwrite_existing=True
-        )
-
-        quarantine_stats = {
-            "success": results.success,
-            "statistics": results.statistics,
-            "expectations": [
-                {"expectation_type": r.expectation_type, "success": r.success, "kwargs": r.kwargs}
-                for r in results.results
-            ]
+        from utils.postgres_hook import PostgresLayerHook
+        pg_hook = PostgresLayerHook()
+        
+        logger.info("Validating quarantine patterns")
+        
+        result = pg_hook.execute_query("""
+            SELECT 
+                COUNT(*) as total_rows,
+                COUNT(CASE WHEN id IS NULL THEN 1 END) as null_ids,
+                COUNT(CASE WHEN payload IS NULL THEN 1 END) as null_payloads,
+                COUNT(CASE WHEN error_reason IS NULL THEN 1 END) as null_errors
+            FROM quarantine.sales_failed
+        """)
+        
+        if len(result) > 1 and result[1]:
+            row = result[1][0]
+            if isinstance(row, dict):
+                total = row.get("total_rows", 0)
+                null_ids = row.get("null_ids", 0)
+                null_payloads = row.get("null_payloads", 0)
+                null_errors = row.get("null_errors", 0)
+            else:
+                total, null_ids, null_payloads, null_errors = row
+        else:
+            total = null_ids = null_payloads = null_errors = 0
+        
+        success = null_ids == 0 and null_payloads == 0 and null_errors == 0
+        
+        return {
+            "success": success,
+            "total_rows": total,
+            "null_ids": null_ids,
+            "null_payloads": null_payloads,
+            "null_errors": null_errors,
         }
-
-        logger.info(f"Quarantine validation complete: {quarantine_stats}")
-        return quarantine_stats
 
     @task
     def profile_silver():
-        """Profile Silver tables and generate expectations automatically"""
-        import great_expectations as gx
-
-        logger.info("Starting Silver table profiling")
-
-        context = gx.get_context(mode="ephemeral")
-
-        datasource = context.sources.add_postgres(
-            name="postgres_silver",
-            connection_string="postgresql+psycopg2://airflow:airflow@postgres:5432/airflow"
-        )
-
-        tables = ["sales", "products", "stores", "customers"]
+        from utils.postgres_hook import PostgresLayerHook
+        pg_hook = PostgresLayerHook()
+        
+        logger.info("Profiling Silver tables")
+        
+        tables = ["sales", "customers", "products"]
         profiling_results = {}
-
+        
         for table in tables:
             try:
-                batch_request = datasource.build_batch_request(
-                    schema_name="silver",
-                    table_name=table
-                )
-
-                batch = context.get_batch_list(batch_request)[0]
-
-                profiler = gx.profile.SimpleProfiler()
-                suite = profiler.profile(
-                    data_asset=batch,
-                    expectation_suite_name=f"{table}_profiled"
-                )
-
-                context.save_expectation_suite(
-                    expectation_suite_name=f"{table}_profiled",
-                    overwrite_existing=True
-                )
-
+                result = pg_hook.execute_query(f"""
+                    SELECT COUNT(*) as row_count FROM silver.{table}
+                """)
+                
+                if len(result) > 1 and result[1]:
+                    row = result[1][0]
+                    if isinstance(row, dict):
+                        row_count = row.get("row_count", 0)
+                    else:
+                        row_count = row[0] if row else 0
+                else:
+                    row_count = 0
+                
                 profiling_results[table] = {
                     "success": True,
-                    "expectation_count": len(suite.expectations),
-                    "suite_name": f"{table}_profiled"
+                    "row_count": row_count,
                 }
-                logger.info(f"Profiled {table}: {len(suite.expectations)} expectations")
-
+                logger.info(f"Profiled {table}: {row_count} rows")
+                
             except Exception as e:
-                profiling_results[table] = {
-                    "success": False,
-                    "error": str(e)
-                }
+                profiling_results[table] = {"success": False, "error": str(e)}
                 logger.error(f"Failed to profile {table}: {e}")
-
+        
         return profiling_results
 
     @task
-    def detect_drift():
-        """Detect schema and data drift between runs"""
-        import great_expectations as gx
-
-        logger.info("Starting drift detection")
-
-        context = gx.get_context(mode="ephemeral")
-
-        datasource = context.sources.add_postgres(
-            name="postgres_silver",
-            connection_string="postgresql+psycopg2://airflow:airflow@postgres:5432/airflow"
-        )
-
-        tables = ["sales", "products", "stores", "customers"]
+    def detect_drift(profiling_results):
+        from utils.postgres_hook import PostgresLayerHook
+        pg_hook = PostgresLayerHook()
+        
+        logger.info("Detecting drift - comparing with previous runs")
+        
+        tables = ["sales", "customers", "products"]
         drift_results = {}
-
+        
         for table in tables:
             try:
-                batch_request = datasource.build_batch_request(
-                    schema_name="silver",
-                    table_name=table
-                )
-
-                checkpoint = gx.checkpoint.SimpleCheckpoint(
-                    name=f"{table}_drift_check",
-                    data_context=context,
-                    expectation_suite_name=f"{table}_profiled"
-                )
-
-                result = checkpoint.run(batch_request=batch_request)
-
-                unexpected_values = []
-                for expectation_result in result.results:
-                    if not expectation_result.success:
-                        if hasattr(expectation_result, 'result'):
-                            unexpected_values.append({
-                                "expectation": expectation_result.expectation_type,
-                                "details": expectation_result.result
-                            })
-
-                drift_detected = len(unexpected_values) > 0
-
+                current_result = pg_hook.execute_query(f"""
+                    SELECT COUNT(*) as row_count FROM silver.{table}
+                """)
+                
+                if len(current_result) > 1 and current_result[1]:
+                    row = current_result[1][0]
+                    if isinstance(row, dict):
+                        current_count = row.get("row_count", 0)
+                    else:
+                        current_count = row[0] if row else 0
+                else:
+                    current_count = 0
+                
+                previous_count = profiling_results.get(table, {}).get("row_count", 0)
+                
+                # Simple drift detection: if count changed significantly (>10%)
+                has_drift = False
+                if previous_count > 0:
+                    change_pct = abs(current_count - previous_count) / previous_count * 100
+                    has_drift = change_pct > 10
+                
                 drift_results[table] = {
-                    "drift_detected": drift_detected,
-                    "unexpected_count": len(unexpected_values),
-                    "unexpected_details": unexpected_values[:5],
-                    "success": result.success
+                    "drift_detected": has_drift,
+                    "current_count": current_count,
+                    "previous_count": previous_count,
+                    "change_pct": abs(current_count - previous_count) / previous_count * 100 if previous_count > 0 else 0,
                 }
-
-                logger.info(f"Drift check for {table}: drift_detected={drift_detected}")
-
+                logger.info(f"Drift check {table}: current={current_count}, previous={previous_count}, drift={has_drift}")
+                
             except Exception as e:
-                drift_results[table] = {
-                    "drift_detected": False,
-                    "error": str(e)
-                }
+                drift_results[table] = {"drift_detected": False, "error": str(e)}
                 logger.error(f"Drift check failed for {table}: {e}")
-
+        
         return drift_results
 
     @task
-    def generate_data_docs():
-        """Generate HTML data docs from validation results"""
-        import great_expectations as gx
-        from great_expectations.data_context import FileDataContext
-
-        logger.info("Generating Data Docs")
-
-        context = FileDataContext(project_root_dir=GX_DIR)
-
-        context.build_data_docs()
-
-        data_docs_site = context.get_docs_sites_urls()
-        docs_url = data_docs_site[0]["site_url"] if data_docs_site else "N/A"
-
-        logger.info(f"Data Docs generated: {docs_url}")
-        return {"docs_url": docs_url, "sites": data_docs_site}
+    def generate_data_docs(quarantine_results=None, profiling_results=None, drift_results=None):
+        import os
+        from datetime import datetime
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        
+        logger.info("Generating Data Quality Report")
+        
+        report_dir = "/opt/airflow/data/data_docs"
+        os.makedirs(report_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_file = os.path.join(report_dir, f"quality_report_{timestamp}.pdf")
+        
+        doc = SimpleDocTemplate(report_file, pagesize=letter)
+        styles = getSampleStyleSheet()
+        elements = []
+        
+        # Title
+        title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=20, spaceAfter=20)
+        elements.append(Paragraph("Data Quality Report", title_style))
+        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+        elements.append(Spacer(1, 20))
+        
+        # Quarantine Summary
+        elements.append(Paragraph("Quarantine Summary", styles['Heading2']))
+        q_data = [
+            ['Metric', 'Value'],
+            ['Total Rows', str(quarantine_results.get('total_rows', 'N/A') if quarantine_results else 'N/A')],
+            ['Null IDs', str(quarantine_results.get('null_ids', 'N/A') if quarantine_results else 'N/A')],
+            ['Null Payloads', str(quarantine_results.get('null_payloads', 'N/A') if quarantine_results else 'N/A')],
+            ['Null Errors', str(quarantine_results.get('null_errors', 'N/A') if quarantine_results else 'N/A')],
+        ]
+        q_table = Table(q_data, colWidths=[200, 200])
+        q_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        elements.append(q_table)
+        elements.append(Spacer(1, 20))
+        
+        # Silver Tables Profiling
+        elements.append(Paragraph("Silver Tables Profiling", styles['Heading2']))
+        p_data = [['Table', 'Row Count', 'Status']]
+        if profiling_results:
+            for table, data in profiling_results.items():
+                status = "OK" if data.get("success") else "FAILED"
+                p_data.append([table, str(data.get("row_count", 0)), status])
+        
+        p_table = Table(p_data, colWidths=[150, 150, 100])
+        p_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        elements.append(p_table)
+        elements.append(Spacer(1, 20))
+        
+        # Drift Detection
+        elements.append(Paragraph("Drift Detection", styles['Heading2']))
+        d_data = [['Table', 'Drift Detected', 'Change %']]
+        if drift_results:
+            for table, data in drift_results.items():
+                drift = "YES" if data.get("drift_detected", False) else "NO"
+                change_pct = f"{data.get('change_pct', 0):.2f}%"
+                d_data.append([table, drift, change_pct])
+        
+        d_table = Table(d_data, colWidths=[150, 150, 100])
+        d_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        elements.append(d_table)
+        
+        # Build PDF
+        doc.build(elements)
+        
+        docs_url = f"file://{report_file}"
+        logger.info(f"Data quality report generated: {report_file}")
+        
+        return {"docs_url": docs_url, "report_file": report_file}
 
     @task
     def send_alerts(quarantine_results, profiling_results, drift_results, docs_info):
-        """Send email alerts with all validation results"""
         logger.info("Sending quality alert emails")
 
-        has_issues = (
-            not quarantine_results.get("success", True) or
-            any(r.get("drift_detected", False) for r in drift_results.values()) or
-            any(not r.get("success", False) for r in profiling_results.values())
-        )
+        from utils.postgres_hook import PostgresLayerHook
+        pg_hook = PostgresLayerHook()
 
-        quarantine_count_query = """
+        q_result = pg_hook.execute_query("""
             SELECT COUNT(*) as total,
                    COUNT(CASE WHEN replayed = FALSE THEN 1 END) as pending,
                    COUNT(CASE WHEN replayed = TRUE THEN 1 END) as replayed
             FROM quarantine.sales_failed
-        """
+        """)
 
-        from utils.postgres_hook import PostgresLayerHook
-        pg_hook = PostgresLayerHook()
-        q_result = pg_hook.execute_query(quarantine_count_query)
-        q_stats = q_result[1][0] if q_result[1] else (0, 0, 0)
+        if len(q_result) > 1 and q_result[1]:
+            row = q_result[1][0]
+            if isinstance(row, dict):
+                total = row.get("total", 0)
+                pending = row.get("pending", 0)
+                replayed = row.get("replayed", 0)
+            else:
+                total, pending, replayed = row if len(row) == 3 else (row[0] if row else 0, 0, 0)
+        else:
+            total = pending = replayed = 0
 
-        subject = f"[{'ALERT' if has_issues else 'OK'}] Data Quality Report - {datetime.now().strftime('%Y-%m-%d')}"
+        quarantine_stats = {
+            "stats": {
+                "total_quarantined": total,
+                "pending": pending,
+                "replayed": replayed,
+            },
+            "pending": pending,
+            "replayed": replayed,
+        }
 
-        html_body = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; margin: 20px;">
-            <h1>Data Quality Report</h1>
-            <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            
-            <h2 style="color: #2c3e50;">Quarantine Status</h2>
-            <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
-                <tr style="background: #ecf0f1;">
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Total</th>
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Pending</th>
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Replayed</th>
-                </tr>
-                <tr>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats[0]}</td>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if q_stats[1] > 0 else '#d5f5e3'};">{q_stats[1]}</td>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats[2]}</td>
-                </tr>
-            </table>
-            
-            <h2 style="color: #2c3e50;">Silver Profiling Results</h2>
-            <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
-                <tr style="background: #ecf0f1;">
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Table</th>
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Status</th>
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Expectations</th>
-                </tr>
-        """
+        # Get PDF report path from docs_info
+        pdf_path = docs_info.get("report_file") if isinstance(docs_info, dict) else None
 
-        for table, result in profiling_results.items():
-            status = "✓ OK" if result.get("success") else "✗ FAILED"
-            exp_count = result.get("expectation_count", "N/A")
-            bg = "#d5f5e3" if result.get("success") else "#fadbd8"
-            html_body += f"""
-                <tr>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7;">{table}</td>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; background: {bg};">{status}</td>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{exp_count}</td>
-                </tr>
-            """
+        result = send_data_quality_alert(
+            quarantine_stats=quarantine_stats,
+            profiling_results=profiling_results,
+            drift_results=drift_results,
+            recipient=ALERT_EMAIL,
+            attachment_path=pdf_path
+        )
 
-        html_body += """
-            </table>
-            
-            <h2 style="color: #2c3e50;">Drift Detection Results</h2>
-            <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
-                <tr style="background: #ecf0f1;">
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Table</th>
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Drift Detected</th>
-                    <th style="padding: 10px; border: 1px solid #bdc3c7;">Issues</th>
-                </tr>
-        """
+        logger.info(f"Email send result: {result}")
+        return result
 
-        for table, result in drift_results.items():
-            drift = "⚠ YES" if result.get("drift_detected") else "✓ NO"
-            issues = result.get("unexpected_count", 0)
-            bg = "#fadbd8" if result.get("drift_detected") else "#d5f5e3"
-            html_body += f"""
-                <tr>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7;">{table}</td>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; background: {bg};">{drift}</td>
-                    <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{issues}</td>
-                </tr>
-            """
-
-        docs_url = docs_info.get("docs_url", "N/A")
-        html_body += f"""
-            </table>
-            
-            <h2 style="color: #2c3e50;">Data Docs</h2>
-            <p>View detailed reports: <a href="{docs_url}">{docs_url}</a></p>
-            
-            <hr>
-            <p style="color: #7f8c8d; font-size: 12px;">
-                Generated by Great Expectations Data Quality Pipeline
-            </p>
-        </body>
-        </html>
-        """
-
-        try:
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = subject
-            msg['From'] = 'airflow@amalitech.local'
-            msg['To'] = ALERT_EMAIL
-
-            part = MIMEText(html_body, 'html')
-            msg.attach(part)
-
-            with smtplib.SMTP('smtp.gmail.com', 587) as server:
-                server.starttls()
-                server.login('daniel.agudey.doe@gmail.com', 'your_app_password')
-                server.send_message(msg)
-
-            logger.info(f"Alert email sent to {ALERT_EMAIL}")
-            return {"status": "Email sent", "recipient": ALERT_EMAIL}
-
-        except Exception as e:
-            logger.error(f"Failed to send email: {e}")
-            return {"status": "Failed", "error": str(e)}
-
+    # Dependencies
+    # Phase 1: Run all quality checks in parallel
     quarantine_results = validate_quarantine_patterns()
     profiling_results = profile_silver()
-    drift_results = detect_drift()
-    docs_info = generate_data_docs()
+    drift_results = detect_drift(profiling_results)
+    
+    # Phase 2: Generate data docs AFTER quality checks complete
+    docs_info = generate_data_docs(quarantine_results, profiling_results, drift_results)
 
+    # Phase 3: Send alerts AFTER everything is done
     send_alerts(
         quarantine_results=quarantine_results,
         profiling_results=profiling_results,

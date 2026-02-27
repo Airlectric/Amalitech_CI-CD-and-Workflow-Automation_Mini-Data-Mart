@@ -199,7 +199,19 @@ class PostgresLayerHook(PostgresHook):
         inserted = 0
         try:
             for record in records:
-                payload_json = json.dumps(record.get("payload", {}))
+                payload = record.get("payload", {})
+                payload_clean = {}
+                for k, v in payload.items():
+                    if hasattr(v, 'isoformat'):
+                        payload_clean[k] = v.isoformat()
+                    elif v is None:
+                        payload_clean[k] = None
+                    elif isinstance(v, float) and (str(v) == 'nan' or str(v) == 'NaN' or str(v) == 'inf'):
+                        payload_clean[k] = None
+                    else:
+                        payload_clean[k] = v
+                
+                payload_json = json.dumps(payload_clean, allow_nan=False)
                 cursor.execute(f"""
                     INSERT INTO {full_table}
                     (id, payload, error_reason, source_file, ingestion_run_id, failed_at)
