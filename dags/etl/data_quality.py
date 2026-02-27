@@ -4,35 +4,29 @@ from typing import Dict, List, Any
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
-from airflow.operators.python import BranchPythonOperator
-from airflow.operators.email import EmailOperator
+from airflow.utils.email import send_email_smtp
 
 import sys
 sys.path.insert(0, "/opt/airflow/dags")
 
 from utils.postgres_hook import PostgresLayerHook
+from config.quality_config import (
+    SILVER_SCHEMA,
+    QUALITY_RULES,
+    TABLES_TO_CHECK,
+    ALERT_DEFAULTS
+)
+from sql.quality_queries import (
+    build_null_query,
+    build_unique_query,
+    build_value_range_query,
+    get_source_files_query,
+    build_bad_records_query
+)
+from templates.email.quality_alerts import format_failure_email
 
 
-SILVER_SCHEMA = "silver"
-GOLD_SCHEMA = "gold"
-
-QUALITY_RULES = {
-    "sales": {
-        "not_null": ["transaction_id", "sale_date", "product_id", "quantity", "unit_price", "net_amount"],
-        "positive_values": ["quantity", "unit_price", "net_amount", "gross_amount"],
-        "value_ranges": {
-            "quantity": {"min": 1, "max": 1000},
-            "unit_price": {"min": 0.01, "max": 100000},
-            "net_amount": {"min": 0.01, "max": 1000000},
-            "gross_amount": {"min": 0.01, "max": 1000000},
-            "sale_hour": {"min": 0, "max": 23}
-        }
-    },
-    "customers": {
-        "not_null": ["customer_id"],
-        "unique": ["customer_id"]
-    }
-}
+ALERT_EMAIL = Variable.get("alert_email", default_var="daniel.doe@a2sv.org")
 
 
 default_args = {
@@ -40,34 +34,49 @@ default_args = {
     "depends_on_past": False,
     "email_on_failure": True,
     "email_on_retry": False,
-    "retries": 2,
-    "retry_delay": timedelta(minutes=5),
-    "email": ["daniel.doe@amalitech.com"],
+    "retries": ALERT_DEFAULTS["retries"],
+    "retry_delay": timedelta(minutes=ALERT_DEFAULTS["retry_delay_minutes"]),
+    "email": [ALERT_EMAIL],
 }
 
 
 with DAG(
     dag_id="data_quality_checks",
     start_date=datetime(2026, 1, 1),
-    schedule="0 */3 * * *",
+    schedule=ALERT_DEFAULTS["schedule"],
     default_args=default_args,
     catchup=False,
     max_active_runs=1,
-    tags=["quality", "validation", "great_expectations"],
-    description="Data quality checks using Great Expectations"
+    tags=["quality", "validation"],
+    description="Data quality checks using configurable rules"
 ) as dag:
 
     @task
     def check_table_exists():
         pg_hook = PostgresLayerHook()
-        tables = ["sales", "customers"]
         results = {}
 
-        for table in tables:
+        for table in TABLES_TO_CHECK:
             exists = pg_hook.table_exists(table, schema=SILVER_SCHEMA)
             results[table] = exists
 
         return results
+
+    @task
+    def get_source_files():
+        pg_hook = PostgresLayerHook()
+        query = get_source_files_query()
+        result = pg_hook.execute_query(query)
+        
+        files = []
+        if result[1]:
+            for row in result[1]:
+                files.append({
+                    "file_path": row[0],
+                    "ingest_date": str(row[1])
+                })
+        
+        return files
 
     @task
     def run_null_checks(table: str):
@@ -77,10 +86,7 @@ with DAG(
 
         results = {}
         for col in not_null_cols:
-            query = f"""
-                SELECT COUNT(*) FROM {SILVER_SCHEMA}.{table}
-                WHERE {col} IS NULL
-            """
+            query = build_null_query(SILVER_SCHEMA, table, col)
             result = pg_hook.execute_query(query)
             if result[1]:
                 null_count = result[1][0][0]
@@ -96,35 +102,24 @@ with DAG(
     def run_value_range_checks(table: str):
         pg_hook = PostgresLayerHook()
         rules = QUALITY_RULES.get(table, {})
-        ranges = rules.get("value_ranges", {})
+        value_ranges = rules.get("value_ranges", {})
 
         results = {}
-        for col, range_spec in ranges.items():
-            issues = []
-
-            if "min" in range_spec:
-                query = f"""
-                    SELECT COUNT(*) FROM {SILVER_SCHEMA}.{table}
-                    WHERE {col} < {range_spec['min']}
-                """
-                result = pg_hook.execute_query(query)
-                if result[1] and result[1][0][0] > 0:
-                    issues.append(f"Below minimum: {result[1][0][0]} rows")
-
-            if "max" in range_spec:
-                query = f"""
-                    SELECT COUNT(*) FROM {SILVER_SCHEMA}.{table}
-                    WHERE {col} > {range_spec['max']}
-                """
-                result = pg_hook.execute_query(query)
-                if result[1] and result[1][0][0] > 0:
-                    issues.append(f"Above maximum: {result[1][0][0]} rows")
-
-            results[col] = {
-                "check": "value_range",
-                "passed": len(issues) == 0,
-                "issues": issues
-            }
+        for col, range_config in value_ranges.items():
+            min_val = range_config.get("min", 0)
+            max_val = range_config.get("max", 999999)
+            
+            query = build_value_range_query(SILVER_SCHEMA, table, col, min_val, max_val)
+            result = pg_hook.execute_query(query)
+            
+            if result[1]:
+                invalid_count = result[1][0][0]
+                results[col] = {
+                    "check": "value_range",
+                    "passed": invalid_count == 0,
+                    "invalid_count": invalid_count,
+                    "issues": [] if invalid_count == 0 else [f"Values outside range {min_val}-{max_val}"]
+                }
 
         return {"table": table, "results": results}
 
@@ -136,13 +131,7 @@ with DAG(
 
         results = {}
         for col in unique_cols:
-            query = f"""
-                SELECT {col}, COUNT(*) as cnt
-                FROM {SILVER_SCHEMA}.{table}
-                GROUP BY {col}
-                HAVING COUNT(*) > 1
-                LIMIT 10
-            """
+            query = build_unique_query(SILVER_SCHEMA, table, col)
             result = pg_hook.execute_query(query)
             duplicate_count = len(result[1]) if result[1] else 0
 
@@ -186,38 +175,93 @@ with DAG(
         }
 
         if failed_checks > 0:
-            raise ValueError(f"Data quality checks failed: {failed_checks} out of {total_checks} checks failed. Failed details: {failed_details}")
+            raise ValueError(f"Data quality checks failed: {failed_checks} out of {total_checks} checks failed")
 
         return report
 
+    @task
+    def get_failed_source_files(check_results: List[dict], source_files: List[dict]) -> Dict[str, Any]:
+        pg_hook = PostgresLayerHook()
+        
+        failed_sources = {}
+        
+        for result in check_results:
+            if "results" not in result:
+                continue
+                
+            table = result.get("table", "unknown")
+            
+            for col, check_result in result["results"].items():
+                if not check_result.get("passed", True):
+                    try:
+                        query = build_bad_records_query(SILVER_SCHEMA, table, col, check_result.get("check"))
+                        result = pg_hook.execute_query(query)
+                        
+                        bad_sources = []
+                        if result[1]:
+                            for row in result[1]:
+                                bad_sources.append({
+                                    "ingest_date": str(row[0]),
+                                    "bad_record_count": row[1]
+                                })
+                        
+                        key = f"{table}.{col}"
+                        failed_sources[key] = bad_sources
+                    except:
+                        pass
+        
+        return {
+            "source_files": source_files,
+            "failed_sources": failed_sources
+        }
+
+    @task
+    def send_failure_email_task(**context):
+        from datetime import datetime
+        
+        ti = context['ti']
+        report = ti.xcom_pull(task_ids='generate_quality_report')
+        source_info = ti.xcom_pull(task_ids='get_failed_source_files')
+        
+        if not report:
+            report = {"failed_details": [], "total_checks": 0, "passed": 0, "failed": 0}
+        
+        if not source_info:
+            source_info = {"source_files": [], "failed_sources": {}}
+        
+        html_content = format_failure_email(
+            total_checks=report.get('total_checks', 0),
+            passed=report.get('passed', 0),
+            failed=report.get('failed', 0),
+            pass_rate=report.get('pass_rate', 0) * 100,
+            failed_details=report.get('failed_details', []),
+            failed_sources=source_info.get('failed_sources', {}),
+            source_files=source_info.get('source_files', []),
+            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            run_id=context.get('run_id', 'N/A')
+        )
+        
+        subject = f"🚨 Data Quality Failed - {report.get('failed', 0)} checks failed"
+        
+        send_email_smtp(to=ALERT_EMAIL, subject=subject, html_content=html_content)
+        
+        return "Email sent"
+
     table_exists = check_table_exists()
+    source_files = get_source_files()
 
-    null_checks = []
-    range_checks = []
-    unique_checks = []
-
-    for table in ["sales", "customers"]:
-        null_checks.append(run_null_checks(table))
-        range_checks.append(run_value_range_checks(table))
-        unique_checks.append(run_uniqueness_checks(table))
+    null_checks = [run_null_checks(table) for table in TABLES_TO_CHECK]
+    range_checks = [run_value_range_checks(table) for table in TABLES_TO_CHECK]
+    unique_checks = [run_uniqueness_checks(table) for table in TABLES_TO_CHECK]
 
     all_checks = null_checks + range_checks + unique_checks
 
     report = generate_quality_report(all_checks)
+    
+    source_info = get_failed_source_files(all_checks, source_files)
 
-    send_failure_email = EmailOperator(
-        task_id="send_failure_email",
-        to="daniel.doe@amalitech.com",
-        subject="Data Quality Check Failed - {{ ds }}",
-        html_content="""
-            <h3>Data Quality Check Failed</h3>
-            <p><strong>Date:</strong> {{ ds }}</p>
-            <p><strong>DAG:</strong> data_quality_checks</p>
-            <p>The data quality checks have failed. Please review the quality report in Airflow.</p>
-            <p>Check the DAG logs for detailed failure information.</p>
-        """,
-        trigger_rule="all_failed",
-    )
+    email_task = send_failure_email_task()
 
     table_exists >> all_checks >> report
-    report >> send_failure_email
+    source_files >> source_info >> email_task
+    report >> email_task

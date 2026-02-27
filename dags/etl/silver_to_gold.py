@@ -4,6 +4,7 @@ from typing import Optional
 from airflow import DAG
 from airflow.decorators import task
 from airflow.sensors.external_task import ExternalTaskSensor
+from airflow.models import Variable
 
 import sys
 sys.path.insert(0, "/opt/airflow/dags")
@@ -14,6 +15,7 @@ from utils.postgres_hook import PostgresLayerHook
 SILVER_SCHEMA = "silver"
 GOLD_SCHEMA = "gold"
 
+ALERT_EMAIL = Variable.get("alert_email", default_var="daniel.doe@a2sv.org")
 
 default_args = {
     "owner": "airflow",
@@ -22,7 +24,7 @@ default_args = {
     "email_on_retry": False,
     "retries": 3,
     "retry_delay": timedelta(minutes=5),
-    "email": ["daniel.doe@amalitech.com"],
+    "email": [ALERT_EMAIL],
 }
 
 

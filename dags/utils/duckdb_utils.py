@@ -93,12 +93,14 @@ class DuckDBValidator:
 
     def list_parquet_files(self, bucket: str, prefix: str = "") -> List[str]:
         """List all Parquet files in a MinIO bucket/prefix"""
+        conn = self._get_connection()
+        
         query = f"""
             SELECT * FROM read_parquet('s3://{bucket}/{prefix}*.parquet')
             LIMIT 0
         """
         try:
-            self.conn.execute(query)
+            conn.execute(query)
             return [f"s3://{bucket}/{prefix}"]
         except:
             return []
@@ -120,13 +122,15 @@ class DuckDBValidator:
         Returns:
             pandas DataFrame
         """
+        conn = self._get_connection()
+        
         col_str = ", ".join(columns) if columns else "*"
         query = f"""
             SELECT {col_str} FROM read_parquet('s3://{bucket}/{key_pattern}')
         """
         
         try:
-            result = self.conn.execute(query)
+            result = conn.execute(query)
             df = result.df()
             logger.info(f"Read {len(df)} rows from s3://{bucket}/{key_pattern}")
             return df
@@ -377,6 +381,8 @@ class DuckDBValidator:
         Returns:
             DataFrame with query results
         """
+        conn = self._get_connection()
+        
         col_str = ", ".join(select) if select else "*"
         
         query = f"SELECT {col_str} FROM read_parquet('s3://{bucket}/{key_pattern}')"
@@ -388,7 +394,7 @@ class DuckDBValidator:
             query += f" GROUP BY {', '.join(group_by)}"
         
         try:
-            result = self.conn.execute(query)
+            result = conn.execute(query)
             return result.df()
         except Exception as e:
             logger.error(f"Query failed: {e}")
