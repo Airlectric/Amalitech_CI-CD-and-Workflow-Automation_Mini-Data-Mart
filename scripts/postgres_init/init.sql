@@ -29,6 +29,46 @@ CREATE INDEX IF NOT EXISTS idx_metadata_status ON metadata.ingestion_metadata(st
 CREATE INDEX IF NOT EXISTS idx_metadata_ingest_date ON metadata.ingestion_metadata(ingest_date);
 CREATE INDEX IF NOT EXISTS idx_metadata_dataset ON metadata.ingestion_metadata(dataset_name);
 
+-- Create quarantine schema for bad records (GAP 1)
+CREATE SCHEMA IF NOT EXISTS quarantine;
+
+-- Quarantine table for failed sales records
+CREATE TABLE IF NOT EXISTS quarantine.sales_failed (
+    id              BIGINT,
+    payload         JSONB NOT NULL,
+    error_reason    TEXT NOT NULL,
+    failed_at       TIMESTAMP WITH TIME ZONE DEFAULT now(),
+    ingestion_run_id UUID NOT NULL,
+    source_file     TEXT,
+    corrected_by    TEXT,
+    corrected_at    TIMESTAMP WITH TIME ZONE,
+    replayed        BOOLEAN DEFAULT FALSE,
+    replayed_at     TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (ingestion_run_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quarantine_failed_at ON quarantine.sales_failed(failed_at);
+CREATE INDEX IF NOT EXISTS idx_quarantine_replayed ON quarantine.sales_failed(replayed);
+
+-- Create audit schema for tracking ingestion runs (GAP 2)
+CREATE SCHEMA IF NOT EXISTS audit;
+
+-- Ingestion run tracking
+CREATE TABLE IF NOT EXISTS audit.ingestion_runs (
+    ingestion_run_id   UUID PRIMARY KEY,
+    started_at        TIMESTAMP WITH TIME ZONE DEFAULT now(),
+    finished_at       TIMESTAMP WITH TIME ZONE,
+    files_scanned     TEXT[],
+    rows_read         BIGINT,
+    rows_written_silver BIGINT,
+    rows_quarantined  BIGINT,
+    status            TEXT,
+    operator          TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_started_at ON audit.ingestion_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_audit_status ON audit.ingestion_runs(status);
+
 -- Create Silver tables
 CREATE TABLE IF NOT EXISTS silver.sales (
     sale_id SERIAL PRIMARY KEY,
@@ -184,10 +224,14 @@ ORDER BY total_revenue DESC;
 GRANT USAGE ON SCHEMA silver TO airflow;
 GRANT USAGE ON SCHEMA gold TO airflow;
 GRANT USAGE ON SCHEMA metadata TO airflow;
+GRANT USAGE ON SCHEMA quarantine TO airflow;
+GRANT USAGE ON SCHEMA audit TO airflow;
 
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA silver TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA gold TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA metadata TO airflow;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA quarantine TO airflow;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA audit TO airflow;
 
 -- Grant privileges for metabase
 GRANT ALL PRIVILEGES ON DATABASE metabase TO airflow;
