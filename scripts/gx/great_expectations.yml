@@ -1,0 +1,38 @@
+config_version: 4
+
+datasources:
+  postgres_silver:
+    class_name: Datasource
+    execution_engine:
+      class_name: SqlAlchemyExecutionEngine
+      connection_string: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    data_connectors:
+      default_inferred_data_connector_name:
+        class_name: InferredAssetSqlDataConnector
+        name: whole_table
+
+stores:
+  expectations_store:
+    class_name: ExpectationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: expectations/
+
+  validations_store:
+    class_name: ValidationsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/validations/
+
+  data_docs_store:
+    class_name: SiteDataDocsStore
+    store_backend:
+      class_name: TupleFilesystemStoreBackend
+      base_directory: uncommitted/data_docs/
+
+expectations_store_name: expectations_store
+validations_store_name: validations_store
+data_docs_site_name: local_site
+
+anonymous_usage_statistics:
+  enabled: false

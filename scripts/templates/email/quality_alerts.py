@@ -24,8 +24,8 @@ QUALITY_FAILURE_EMAIL = """
             <td style="padding: 10px; border: 1px solid #e53e3e;">Failed</td>
             <td style="padding: 10px; border: 1px solid #e53e3e; color: red; font-weight: bold;">{failed}</td>
         </tr>
-        <tr>
-            <td style="padding: 10px; border: 1px solid #e53e3e;">Pass Rate</td>
+        <tr style="padding: 10px; border: 1px solid #e53e3e;">Pass Rate>
+            <td</td>
             <td style="padding: 10px; border: 1px solid #e53e3e;">{pass_rate}%</td>
         </tr>
     </table>
@@ -93,7 +93,6 @@ def format_failure_email(
 ) -> str:
     """Format the failure email with all data"""
     
-    # Build failure rows
     failure_rows = ""
     for f in failed_details:
         table = f.get('table', 'N/A')
@@ -131,7 +130,6 @@ def format_failure_email(
     if not failure_rows:
         failure_rows = "<tr><td colspan='5'>No specific details available</td></tr>"
     
-    # Build source list
     source_list = ""
     for sf in source_files[:5]:
         source_list += SIMPLE_SOURCE_ITEM.format(
