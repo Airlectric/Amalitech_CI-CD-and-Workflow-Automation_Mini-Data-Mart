@@ -110,11 +110,12 @@ with DAG(
                 profiling_results[table] = {
                     "success": True,
                     "row_count": row_count,
+                    "populated": row_count > 0
                 }
-                logger.info(f"Profiled {table}: {row_count} rows")
+                logger.info(f"Profiled {table}: {row_count} rows (populated={row_count > 0})")
                 
             except Exception as e:
-                profiling_results[table] = {"success": False, "error": str(e)}
+                profiling_results[table] = {"success": False, "error": str(e), "populated": False}
                 logger.error(f"Failed to profile {table}: {e}")
         
         return profiling_results
@@ -130,6 +131,19 @@ with DAG(
         drift_results = {}
         
         for table in tables:
+            is_populated = profiling_results.get(table, {}).get("populated", False)
+            
+            if not is_populated:
+                drift_results[table] = {
+                    "drift_detected": False,
+                    "current_count": 0,
+                    "previous_count": 0,
+                    "change_pct": 0,
+                    "status": "not_populated"
+                }
+                logger.info(f"Skipping {table}: not yet populated (will be populated by silver_to_gold)")
+                continue
+            
             try:
                 current_result = pg_hook.execute_query(f"""
                     SELECT COUNT(*) as row_count FROM silver.{table}
@@ -146,7 +160,6 @@ with DAG(
                 
                 previous_count = profiling_results.get(table, {}).get("row_count", 0)
                 
-                # Simple drift detection: if count changed significantly (>10%)
                 has_drift = False
                 if previous_count > 0:
                     change_pct = abs(current_count - previous_count) / previous_count * 100
@@ -157,6 +170,7 @@ with DAG(
                     "current_count": current_count,
                     "previous_count": previous_count,
                     "change_pct": abs(current_count - previous_count) / previous_count * 100 if previous_count > 0 else 0,
+                    "status": "checked"
                 }
                 logger.info(f"Drift check {table}: current={current_count}, previous={previous_count}, drift={has_drift}")
                 

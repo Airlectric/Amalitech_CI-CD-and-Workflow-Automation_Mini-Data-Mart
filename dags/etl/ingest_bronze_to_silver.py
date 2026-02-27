@@ -273,4 +273,164 @@ with DAG(
             "errors": errors
         }
 
+    @task
+    def populate_customers():
+        """Extract unique customers from bronze sales and populate silver.customers"""
+        import pandas as pd
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        logger.info("Populating silver.customers from bronze sales")
+        
+        minio_hook = MinIOHook(bucket_name=BRONZE_BUCKET)
+        pg_hook = PostgresLayerHook()
+        duckdb_validator = create_validator()
+        
+        try:
+            files = minio_hook.list_files(prefix="sales", suffix=".parquet")
+            
+            all_customers = []
+            for file_key in files:
+                try:
+                    df = duckdb_validator.read_parquet_from_minio(
+                        bucket=BRONZE_BUCKET,
+                        key_pattern=file_key
+                    )
+                    
+                    if df.empty:
+                        continue
+                    
+                    customer_cols = ["customer_id", "customer_name", "region", "store_location"]
+                    existing_cols = [c for c in customer_cols if c in df.columns]
+                    
+                    if "customer_id" in df.columns:
+                        customers = df[existing_cols].drop_duplicates(subset=["customer_id"])
+                        customers = customers.rename(columns={
+                            "customer_name": "name",
+                            "region": "region",
+                            "store_location": "primary_location"
+                        })
+                        all_customers.append(customers)
+                        
+                except Exception as e:
+                    logger.warning(f"Error reading {file_key}: {e}")
+            
+            if all_customers:
+                combined = pd.concat(all_customers, ignore_index=True)
+                combined = combined.drop_duplicates(subset=["customer_id"])
+                combined = combined.dropna(subset=["customer_id"])
+                
+                inserted = 0
+                for _, row in combined.iterrows():
+                    try:
+                        pg_hook.execute_query("""
+                            INSERT INTO silver.customers (customer_id, name, region, primary_location, created_at)
+                            VALUES (%s, %s, %s, %s, NOW())
+                            ON CONFLICT (customer_id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                region = EXCLUDED.region,
+                                primary_location = EXCLUDED.primary_location
+                        """, parameters=(
+                            row.get("customer_id"),
+                            row.get("name", ""),
+                            row.get("region", ""),
+                            row.get("primary_location", "")
+                        ))
+                        inserted += 1
+                    except Exception as e:
+                        logger.warning(f"Error inserting customer {row.get('customer_id')}: {e}")
+                
+                logger.info(f"Populated {inserted} customers in silver.customers")
+                return {"customers_added": inserted, "status": "success"}
+            else:
+                logger.info("No customers found to populate")
+                return {"customers_added": 0, "status": "no_data"}
+                
+        except Exception as e:
+            logger.error(f"Failed to populate customers: {e}")
+            return {"customers_added": 0, "status": "error", "error": str(e)}
+        finally:
+            duckdb_validator.close()
+
+    @task
+    def populate_products():
+        """Extract unique products from bronze sales and populate silver.products"""
+        import pandas as pd
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        logger.info("Populating silver.products from bronze sales")
+        
+        minio_hook = MinIOHook(bucket_name=BRONZE_BUCKET)
+        pg_hook = PostgresLayerHook()
+        duckdb_validator = create_validator()
+        
+        try:
+            files = minio_hook.list_files(prefix="sales", suffix=".parquet")
+            
+            all_products = []
+            for file_key in files:
+                try:
+                    df = duckdb_validator.read_parquet_from_minio(
+                        bucket=BRONZE_BUCKET,
+                        key_pattern=file_key
+                    )
+                    
+                    if df.empty:
+                        continue
+                    
+                    product_cols = ["product_id", "product_name", "category", "sub_category"]
+                    existing_cols = [c for c in product_cols if c in df.columns]
+                    
+                    if "product_id" in df.columns:
+                        products = df[existing_cols].drop_duplicates(subset=["product_id"])
+                        products = products.rename(columns={
+                            "product_name": "name",
+                            "category": "category",
+                            "sub_category": "sub_category"
+                        })
+                        all_products.append(products)
+                        
+                except Exception as e:
+                    logger.warning(f"Error reading {file_key}: {e}")
+            
+            if all_products:
+                combined = pd.concat(all_products, ignore_index=True)
+                combined = combined.drop_duplicates(subset=["product_id"])
+                combined = combined.dropna(subset=["product_id"])
+                
+                inserted = 0
+                for _, row in combined.iterrows():
+                    try:
+                        pg_hook.execute_query("""
+                            INSERT INTO silver.products (product_id, name, category, sub_category, created_at)
+                            VALUES (%s, %s, %s, %s, NOW())
+                            ON CONFLICT (product_id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                category = EXCLUDED.category,
+                                sub_category = EXCLUDED.sub_category
+                        """, parameters=(
+                            row.get("product_id"),
+                            row.get("name", ""),
+                            row.get("category", ""),
+                            row.get("sub_category", "")
+                        ))
+                        inserted += 1
+                    except Exception as e:
+                        logger.warning(f"Error inserting product {row.get('product_id')}: {e}")
+                
+                logger.info(f"Populated {inserted} products in silver.products")
+                return {"products_added": inserted, "status": "success"}
+            else:
+                logger.info("No products found to populate")
+                return {"products_added": 0, "status": "no_data"}
+                
+        except Exception as e:
+            logger.error(f"Failed to populate products: {e}")
+            return {"products_added": 0, "status": "error", "error": str(e)}
+        finally:
+            duckdb_validator.close()
+
     result = discover_and_ingest()
+    customers_result = populate_customers()
+    products_result = populate_products()
