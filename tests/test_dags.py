@@ -21,7 +21,7 @@ class TestDataQualityDAG:
     def test_dag_has_correct_id(self):
         """Test DAG has correct ID"""
         from data_quality import dag
-        assert dag.dag_id == "data_quality_gx"
+        assert dag.dag_id == "data_quality_checks"
 
     def test_dag_has_schedule(self):
         """Test DAG has schedule"""

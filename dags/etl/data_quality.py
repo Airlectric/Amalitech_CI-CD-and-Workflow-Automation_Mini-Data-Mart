@@ -34,7 +34,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="data_quality_gx",
+    dag_id="data_quality_checks",
     start_date=datetime(2026, 1, 1),
     schedule="0 6 * * *",
     default_args=default_args,

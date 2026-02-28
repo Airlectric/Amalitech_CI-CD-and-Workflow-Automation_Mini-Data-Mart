@@ -159,9 +159,9 @@ class TestAirflowIntegration:
 
     @pytest.mark.integration
     def test_data_quality_dag_exists(self, postgres_conn):
-        """Test data_quality_gx DAG exists"""
+        """Test data_quality_checks DAG exists"""
         cursor = postgres_conn.cursor()
-        cursor.execute("SELECT dag_id FROM dag WHERE dag_id = 'data_quality_gx'")
+        cursor.execute("SELECT dag_id FROM dag WHERE dag_id = 'data_quality_checks'")
         result = cursor.fetchone()
         assert result is not None
 

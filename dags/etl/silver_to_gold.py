@@ -42,7 +42,7 @@ with DAG(
     wait_for_quality_checks = ExternalTaskSensor(
         task_id="wait_for_quality_checks",
         external_dag_id="data_quality_checks",
-        external_task_id="generate_quality_report",
+        external_task_id="send_alerts",
         allowed_states=["success"],
         failed_states=["failed", "upstream_failed"],
         timeout=7200,
