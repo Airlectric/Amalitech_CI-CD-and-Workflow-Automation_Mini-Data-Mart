@@ -92,17 +92,14 @@ class DuckDBValidator:
             return pd.DataFrame()
 
     def list_parquet_files(self, bucket: str, prefix: str = "") -> List[str]:
-        """List all Parquet files in a MinIO bucket/prefix"""
-        conn = self._get_connection()
-        
-        query = f"""
-            SELECT * FROM read_parquet('s3://{bucket}/{prefix}*.parquet')
-            LIMIT 0
-        """
+        """List all Parquet files in a MinIO bucket/prefix using MinIO hook"""
         try:
-            conn.execute(query)
-            return [f"s3://{bucket}/{prefix}"]
-        except:
+            from utils.minio_hook import MinIOHook
+            minio = MinIOHook(bucket_name=bucket)
+            files = minio.list_files(prefix=prefix, suffix=".parquet")
+            return files
+        except Exception as e:
+            logger.warning(f"Failed to list parquet files: {e}")
             return []
     
     def read_parquet_from_minio(

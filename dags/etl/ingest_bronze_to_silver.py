@@ -282,35 +282,30 @@ with DAG(
         logger = logging.getLogger(__name__)
         logger.info("Populating silver.customers from bronze sales")
         
-        minio_hook = MinIOHook(bucket_name=BRONZE_BUCKET)
         pg_hook = PostgresLayerHook()
         duckdb_validator = create_validator()
         
         try:
-            files = minio_hook.list_files(prefix="sales", suffix=".parquet")
-            
             all_customers = []
-            for file_key in files:
+            
+            for file_key in duckdb_validator.list_parquet_files("bronze"):
+                if not file_key.startswith("sales/"):
+                    continue
+                    
                 try:
-                    df = duckdb_validator.read_parquet_from_minio(
-                        bucket=BRONZE_BUCKET,
-                        key_pattern=file_key
-                    )
+                    df = duckdb_validator.read_parquet_from_minio("bronze", file_key)
                     
                     if df.empty:
+                        continue
+                    
+                    if "customer_id" not in df.columns:
                         continue
                     
                     customer_cols = ["customer_id", "customer_name", "region", "store_location"]
                     existing_cols = [c for c in customer_cols if c in df.columns]
                     
-                    if "customer_id" in df.columns:
-                        customers = df[existing_cols].drop_duplicates(subset=["customer_id"])
-                        customers = customers.rename(columns={
-                            "customer_name": "name",
-                            "region": "region",
-                            "store_location": "primary_location"
-                        })
-                        all_customers.append(customers)
+                    customers = df[existing_cols].drop_duplicates(subset=["customer_id"])
+                    all_customers.append(customers)
                         
                 except Exception as e:
                     logger.warning(f"Error reading {file_key}: {e}")
@@ -324,17 +319,13 @@ with DAG(
                 for _, row in combined.iterrows():
                     try:
                         pg_hook.execute_query("""
-                            INSERT INTO silver.customers (customer_id, name, region, primary_location, created_at)
-                            VALUES (%s, %s, %s, %s, NOW())
+                            INSERT INTO silver.customers (customer_id, customer_name, created_at)
+                            VALUES (%s, %s, NOW())
                             ON CONFLICT (customer_id) DO UPDATE SET
-                                name = EXCLUDED.name,
-                                region = EXCLUDED.region,
-                                primary_location = EXCLUDED.primary_location
+                                customer_name = EXCLUDED.customer_name
                         """, parameters=(
                             row.get("customer_id"),
-                            row.get("name", ""),
-                            row.get("region", ""),
-                            row.get("primary_location", "")
+                            row.get("name", "")
                         ))
                         inserted += 1
                     except Exception as e:
@@ -361,35 +352,33 @@ with DAG(
         logger = logging.getLogger(__name__)
         logger.info("Populating silver.products from bronze sales")
         
-        minio_hook = MinIOHook(bucket_name=BRONZE_BUCKET)
         pg_hook = PostgresLayerHook()
         duckdb_validator = create_validator()
         
         try:
-            files = minio_hook.list_files(prefix="sales", suffix=".parquet")
-            
             all_products = []
-            for file_key in files:
+            
+            for file_key in duckdb_validator.list_parquet_files("bronze"):
+                if not file_key.startswith("sales/"):
+                    continue
+                    
                 try:
-                    df = duckdb_validator.read_parquet_from_minio(
-                        bucket=BRONZE_BUCKET,
-                        key_pattern=file_key
-                    )
+                    df = duckdb_validator.read_parquet_from_minio("bronze", file_key)
                     
                     if df.empty:
+                        continue
+                    
+                    if "product_id" not in df.columns:
                         continue
                     
                     product_cols = ["product_id", "product_name", "category", "sub_category"]
                     existing_cols = [c for c in product_cols if c in df.columns]
                     
-                    if "product_id" in df.columns:
-                        products = df[existing_cols].drop_duplicates(subset=["product_id"])
-                        products = products.rename(columns={
-                            "product_name": "name",
-                            "category": "category",
-                            "sub_category": "sub_category"
-                        })
-                        all_products.append(products)
+                    products = df[existing_cols].drop_duplicates(subset=["product_id"])
+                    products = products.rename(columns={
+                        "product_name": "product_name",
+                    })
+                    all_products.append(products)
                         
                 except Exception as e:
                     logger.warning(f"Error reading {file_key}: {e}")
@@ -403,15 +392,15 @@ with DAG(
                 for _, row in combined.iterrows():
                     try:
                         pg_hook.execute_query("""
-                            INSERT INTO silver.products (product_id, name, category, sub_category, created_at)
+                            INSERT INTO silver.products (product_id, product_name, category, sub_category, created_at)
                             VALUES (%s, %s, %s, %s, NOW())
                             ON CONFLICT (product_id) DO UPDATE SET
-                                name = EXCLUDED.name,
+                                product_name = EXCLUDED.product_name,
                                 category = EXCLUDED.category,
                                 sub_category = EXCLUDED.sub_category
                         """, parameters=(
                             row.get("product_id"),
-                            row.get("name", ""),
+                            row.get("product_name", ""),
                             row.get("category", ""),
                             row.get("sub_category", "")
                         ))
