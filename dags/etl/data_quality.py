@@ -659,7 +659,7 @@ with DAG(
         """Branch based on quality check result"""
         quality_passed = alert_result.get("quality_passed", False)
         if quality_passed:
-            return "mark_silver_ready"
+            return "trigger_silver_to_gold"
         else:
             logger.warning("Quality checks FAILED - skipping silver_to_gold")
             return "quality_failed"
@@ -671,11 +671,13 @@ with DAG(
         trigger_rule="none_skipped"
     )
 
-    mark_silver_ready = ExternalTaskMarker(
-        task_id="mark_silver_ready",
-        external_dag_id="silver_to_gold",
-        external_task_id="quality_passed",
+    from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+
+    trigger_silver_to_gold = TriggerDagRunOperator(
+        task_id="trigger_silver_to_gold",
+        trigger_dag_id="silver_to_gold",
+        wait_for_downstream=False,
     )
 
     send_alerts_result >> quality_complete >> quality_branch
-    quality_branch >> [mark_silver_ready, quality_failed]
+    quality_branch >> [trigger_silver_to_gold, quality_failed]

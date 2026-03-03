@@ -35,13 +35,9 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["etl", "silver", "gold", "star-schema", "aggregation"],
-    description="Build star schema: Silver dimensions → Gold facts. Triggered by data_quality_checks after quality passes."
+    description="Build star schema: Silver dimensions → Gold facts. Triggered by data_quality_checks."
 ) as dag:
 
-    quality_passed = EmptyOperator(
-        task_id="quality_passed",
-    )
-    
     @task
     def populate_silver_customers():
         """Populate silver.customers dimension from sales (Star Schema)"""
@@ -365,10 +361,7 @@ with DAG(
     customer_analytics = aggregate_customer_analytics()
     category_insights = aggregate_category_insights()
 
-    # Set dependencies: quality gate must pass first, then dimensions before facts
-    quality_passed >> [customers, products]
-    customers.set_upstream(quality_passed)
-    products.set_upstream(quality_passed)
+    # Set dependencies: dimensions before facts
     daily_sales.set_upstream([customers, products])
     product_perf.set_upstream([customers, products])
     store_perf.set_upstream([customers, products])
