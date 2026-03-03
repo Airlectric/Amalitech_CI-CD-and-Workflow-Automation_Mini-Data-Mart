@@ -132,15 +132,20 @@ flowchart LR
     end
     
     subgraph "silver_to_gold"
-        J[populate_dimensions]
-        K[aggregate_gold]
+        J[populate_silver_customers]
+        K[populate_silver_products]
+        L[populate_gold_daily_sales]
+        M[populate_gold_product_performance]
+        N[populate_gold_store_performance]
+        O[populate_gold_customer_analytics]
+        P[populate_gold_category_insights]
     end
     
     subgraph "remediation_workflow"
-        L[get_quarantined]
-        M[validate_records]
-        N[fix_and_replay]
-        O[notify]
+        Q[get_quarantined]
+        R[validate_records]
+        S[fix_and_replay]
+        T[notify]
     end
     
     A -->|Triggers| B
@@ -155,9 +160,42 @@ flowchart LR
     H --> I
     I --> J
     J --> K
+    K --> L
     L --> M
     M --> N
     N --> O
+    O --> P
+    Q --> R
+    R --> S
+    S --> T
+```
+
+### DAG Details
+
+| DAG | Tasks | Description |
+|-----|-------|-------------|
+| `generate_sample_data` | 1 | Generates test data to MinIO |
+| `ingest_bronze_to_silver` | 3 | Bronze→Silver + dimension population |
+| `data_quality_checks` | 5 | SQL validation, profiling, PDF reports |
+| `silver_to_gold` | 7 | Star Schema aggregation (waits for data_quality_checks) |
+| `remediation_workflow` | 4 | Auto-fix quarantined records |
+
+### DAG Dependencies
+
+```
+generate_sample_data
+        ↓
+ingest_bronze_to_silver
+        ↓
+data_quality_checks (send_alerts)
+        ↓
+silver_to_gold (ExternalTaskSensor waits for data_quality_checks)
+        ↓
+Metabase Dashboards
+
+remediation_workflow (manual trigger)
+        ↓
+quarantine.sales_failed
 ```
 
 ---
@@ -358,18 +396,25 @@ flowchart TB
 ### Silver Layer (PostgreSQL)
 - **Schema**: `silver`
 - **Tables**: 
-  - `sales` - Transaction fact table
-  - `customers` - Customer dimension (populated during ingest)
-  - `products` - Product dimension (populated during ingest)
+  - `sales` - Transaction fact table (populated from Bronze)
+  - `customers` - Customer dimension (populated from sales data)
+  - `products` - Product dimension (populated from sales data)
 
 ### Quarantine Layer (PostgreSQL)
 - **Schema**: `quarantine`
 - **Tables**:
   - `sales_failed` - Failed records awaiting remediation
+    - id, payload (JSONB), error_reason, failed_at, ingestion_run_id
+    - source_file, corrected_by, corrected_at, replayed, replayed_at
 
 ### Gold Layer (PostgreSQL)
 - **Schema**: `gold`
-- **Tables**: Aggregated analytics (daily_sales, product_performance, etc.)
+- **Tables**: Aggregated analytics
+  - `daily_sales` - Daily revenue metrics
+  - `product_performance` - Product-level analytics
+  - `customer_analytics` - Customer behavior + tier (Bronze/Silver/Gold/Platinum)
+  - `store_performance` - Store-level metrics
+  - `category_insights` - Category aggregates
 
 ### Metadata Layer (PostgreSQL)
 - **Schema**: `metadata`
@@ -399,13 +444,31 @@ flowchart TB
 
 ### Pre-configured Dashboards
 
-| Dashboard | Metrics | Charts |
-|-----------|---------|--------|
-| Sales Overview | Daily revenue, transactions | Line, Bar |
-| Product Performance | Revenue by product, category | Pie, Table |
-| Customer Analytics | Segments, LTV | Funnel, Scatter |
-| Store Performance | Revenue by location | Map, Bar |
-| Data Quality | Failed records, trends | Trend, Gauge |
+| Dashboard | ID | Metrics | Charts |
+|-----------|-----|---------|--------|
+| Main Dashboard | 8 | KPIs + All metrics | Multiple |
+| Executive Summary | 3 | Revenue, Transactions, Customers | Line, Scalar |
+| Sales Overview | 2 | Daily sales trends | Line, Bar, Pie |
+| Product Analytics | 4 | Product revenue, categories | Bar, Pie |
+| Customer Analytics | 5 | Segments, LTV | Table, Pie |
+| Store Performance | 6 | Revenue by location | Bar |
+| Data Quality | 7 | Failed records, trends | Line, Bar, Table |
+
+### Data Quality Dashboard
+
+The Data Quality Dashboard provides real-time monitoring:
+
+**KPIs:**
+- Quarantine Records (total failed)
+- Quality Score (88.67%)
+- Total Records Processed
+- Pending Remediation
+
+**Visualizations:**
+- Records by Error Type (bar chart)
+- Failed Records Trend (line chart)
+- Records by Source File (pie chart)
+- Recent Failed Records (table)
 
 ### Database Connection Setup
 
@@ -419,9 +482,58 @@ flowchart TB
    Password: airflow
    ```
 
+### SQL Queries Documentation
+
+All dashboard queries are documented in `docs/dashboard_queries.sql`:
+- 40+ queries organized by dashboard
+- Section 1: Main Dashboard (11 queries)
+- Section 2: Executive Summary (6 queries)
+- Section 3: Sales Overview (5 queries)
+- Section 4: Product Analytics (4 queries)
+- Section 5: Customer Analytics (5 queries)
+- Section 6: Store Performance (4 queries)
+- Section 7: Data Quality (9 queries)
+- Additional insights and schema reference
+
 ### Recommended Visualizations
 
 - **Time Series**: Daily sales trends (line chart)
 - **Categorical**: Revenue by product category (pie/bar)
 - **Ranking**: Top 10 products/customers (table with ranking)
 - **Geographic**: Sales by store location (map)
+
+---
+
+## Metabase Setup Guide
+
+See `notes/METABASE_SETUP_GUIDE.md` for detailed instructions on:
+
+### Creating Questions
+1. Click "+ New" → Select "SQL query"
+2. Select database "Mini Data Platform"
+3. Write SQL query and click "Run"
+4. Choose visualization type (Table, Line, Bar, Pie, Scalar)
+5. Save to a collection
+
+### Creating Collections
+1. Click "+" in the sidebar → "New collection"
+2. Name the collection (e.g., "Sales Analytics")
+3. Organize questions and dashboards
+
+### Creating Tabbed Dashboards
+1. Click "+ New" → "Dashboard"
+2. In edit mode, click "Add a tab"
+3. Create tabs for each section
+4. Drag questions into each tab
+
+### Adding Filters
+1. In dashboard edit mode, click "Add a filter"
+2. Choose filter type (Date, Category, etc.)
+3. Connect filters to visualizations
+
+### Quick Access
+
+| Dashboard | URL |
+|-----------|-----|
+| Main Dashboard | http://localhost:3000/dashboard/8-main-dashboard |
+| Data Quality | http://localhost:3000/dashboard/7-data-quality |

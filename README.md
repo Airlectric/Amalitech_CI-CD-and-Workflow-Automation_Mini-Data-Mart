@@ -24,6 +24,8 @@ Data Generator → MinIO (Bronze) → Airflow + DuckDB → PostgreSQL (Silver/Go
 - ✅ **PDF Reports**: Data quality reports generated as PDF and attached to emails
 - ✅ **Remediation Workflow**: Automatic fixing and replaying of quarantined records
 - ✅ **CI/CD Pipeline**: GitHub Actions with unit, integration, and E2E tests
+- ✅ **Metabase Dashboards**: 7 pre-configured dashboards with KPIs and visualizations
+- ✅ **Data Quality Dashboard**: Real-time monitoring of quarantine trends and remediation status
 
 ## Star Schema Design
 
@@ -180,13 +182,21 @@ docker compose ps
 │       └── duckdb_utils.py           # DuckDB validation
 ├── data/                     # Data storage (local)
 ├── docs/                     # Documentation
-│   └── architecture.md       # Architecture diagrams
+│   ├── architecture.md       # Architecture diagrams
+│   └── dashboard_queries.sql # All dashboard SQL queries
+├── notes/                    # User guides
+│   └── METABASE_SETUP_GUIDE.md # Metabase dashboard creation guide
 ├── scripts/                  # Utility scripts
 │   ├── data_generator/       # Parquet data generator
 │   ├── postgres_init/       # Database initialization
 │   ├── utils/              # Email, hooks utilities
-│   └── run_tests.py         # Test runner
+│   └── setup_metabase.py   # Metabase setup script
 ├── tests/                   # Unit & Integration tests
+│   ├── test_dags.py
+│   ├── test_data_generator.py
+│   ├── test_remediation.py
+│   ├── test_integration.py
+│   └── conftest.py
 ├── docker-compose.yml       # All services definition
 ├── Dockerfile              # Airflow custom image
 ├── requirements.txt        # Python dependencies
@@ -387,13 +397,39 @@ The platform includes pre-configured dashboards for data visualization:
 
 ### Available Dashboards
 
-| Dashboard | Description | Source Tables |
-|-----------|-------------|---------------|
-| Sales Overview | Daily sales metrics, trends | gold.daily_sales |
-| Product Performance | Revenue by product, category | gold.product_performance |
-| Customer Analytics | Customer segments, lifetime value | gold.customer_analytics |
-| Store Performance | Store metrics by location | gold.store_performance |
-| Data Quality | Quality metrics, quarantine trends | quarantine.sales_failed |
+| Dashboard | ID | Description | Source Tables |
+|-----------|-----|-------------|---------------|
+| Main Dashboard | 8 | Unified view with KPIs and charts | All gold tables |
+| Executive Summary | 3 | High-level KPIs | gold.daily_sales |
+| Sales Overview | 2 | Combined sales metrics | gold tables |
+| Product Analytics | 4 | Product & category performance | gold.product_performance, gold.category_insights |
+| Customer Analytics | 5 | Customer segments, LTV | gold.customer_analytics |
+| Store Performance | 6 | Store metrics by location | gold.store_performance |
+| Data Quality | 7 | Quality metrics, quarantine trends | quarantine.sales_failed |
+
+### Accessing Dashboards
+
+- **URL**: http://localhost:3000
+- **Login**: agudeydaniel8@gmail.com / metabase123
+
+### Quick Navigation
+
+| Dashboard | Direct URL |
+|-----------|------------|
+| Main Dashboard | http://localhost:3000/dashboard/8-main-dashboard |
+| Executive Summary | http://localhost:3000/dashboard/3-executive-summary |
+| Product Analytics | http://localhost:3000/dashboard/4-product-analytics |
+| Customer Analytics | http://localhost:3000/dashboard/5-customer-analytics |
+| Store Performance | http://localhost:3000/dashboard/6-store-performance |
+| Data Quality | http://localhost:3000/dashboard/7-data-quality |
+
+### Data Quality Dashboard Features
+
+The Data Quality Dashboard includes:
+
+- **KPIs**: Quarantine Records, Quality Score (88.67%), Total Records Processed, Pending Remediation
+- **Charts**: Error Type Distribution (bar), Failed Records Trend (line), Records by Source (pie)
+- **Table**: Recent Failed Records with error details
 
 ### Connecting Metabase
 
@@ -406,20 +442,30 @@ The platform includes pre-configured dashboards for data visualization:
    - **Username**: airflow
    - **Password**: airflow
 
-### Sample Queries
+### SQL Queries Documentation
 
-```sql
--- Daily sales summary
-SELECT sale_date, total_transactions, net_revenue 
-FROM gold.daily_sales 
-ORDER BY sale_date DESC;
+All dashboard queries are documented in `docs/dashboard_queries.sql`:
+- 40+ SQL queries categorized by dashboard
+- Schema reference for all tables
+- Additional insight queries for deeper analysis
 
--- Top products by revenue
-SELECT product_name, total_revenue 
-FROM gold.product_performance 
-ORDER BY total_revenue DESC 
-LIMIT 10;
-```
+### Creating Custom Dashboards
+
+See `notes/METABASE_SETUP_GUIDE.md` for:
+- How to create questions (step-by-step)
+- Understanding collections
+- Creating tabbed dashboards
+- Adding filters
+- Example queries
+
+## Documentation
+
+| File | Description |
+|------|-------------|
+| `README.md` | This file - overview and quick start |
+| `docs/architecture.md` | Architecture diagrams and system design |
+| `docs/dashboard_queries.sql` | All SQL queries for Metabase dashboards |
+| `notes/METABASE_SETUP_GUIDE.md` | Guide to creating Metabase dashboards |
 
 ## Contributing
 

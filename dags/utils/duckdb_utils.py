@@ -1,3 +1,4 @@
+import os
 import duckdb
 import pandas as pd
 from typing import List, Optional, Dict, Any
@@ -5,17 +6,31 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-MINIO_CONFIG = {
-    "endpoint": "minio:9000",
-    "access_key": "minio",
-    "secret_key": "minio123",
-    "use_ssl": False
-}
+
+def get_minio_config() -> Dict[str, Any]:
+    """Get MinIO config from environment variables - no hardcoded defaults"""
+    access_key = os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("MINIO_ROOT_USER", "")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY") or os.getenv("MINIO_ROOT_PASSWORD", "")
+    endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
+    use_ssl = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
+    
+    if not access_key or not secret_key:
+        logger.warning(
+            "MinIO credentials not fully configured. "
+            "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or MINIO_ROOT_USER/MINIO_ROOT_PASSWORD"
+        )
+    
+    return {
+        "endpoint": endpoint,
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "use_ssl": use_ssl
+    }
 
 
 class DuckDBValidator:
-    def __init__(self, minio_config: Dict[str, Any] = None):
-        self.minio_config = minio_config or MINIO_CONFIG
+    def __init__(self, minio_config: Optional[Dict[str, Any]] = None):
+        self.minio_config = minio_config or get_minio_config()
         self.conn = None
     
     def _get_connection(self):
@@ -46,61 +61,6 @@ class DuckDBValidator:
         if self.conn:
             self.conn.close()
             self.conn = None
-    
-    def read_parquet_from_minio(self, bucket: str, key_pattern: str) -> pd.DataFrame:
-        """
-        Read Parquet files DIRECTLY from MinIO using DuckDB schema-on-read.
-        This queries MinIO without downloading the full file first.
-        """
-        conn = self._get_connection()
-        query = f"""
-            SELECT * FROM read_parquet('s3://{bucket}/{key_pattern}')
-        """
-        try:
-            result = conn.execute(query)
-            df = result.df()
-            logger.info(f"Read {len(df)} rows from s3://{bucket}/{key_pattern}")
-            return df
-        except Exception as e:
-            logger.error(f"Failed to read from MinIO: {e}")
-            return pd.DataFrame()
-    
-    def query_minio_parquet(self, bucket: str, key_pattern: str, 
-                           columns: List[str] = None,
-                           where_clause: str = None,
-                           group_by: List[str] = None) -> pd.DataFrame:
-        """
-        Execute SQL query directly on Parquet files in MinIO.
-        This is TRUE schema-on-read - no download needed.
-        """
-        conn = self._get_connection()
-        
-        col_str = ", ".join(columns) if columns else "*"
-        query = f"SELECT {col_str} FROM read_parquet('s3://{bucket}/{key_pattern}')"
-        
-        if where_clause:
-            query += f" WHERE {where_clause}"
-        
-        if group_by:
-            query += f" GROUP BY {', '.join(group_by)}"
-        
-        try:
-            result = conn.execute(query)
-            return result.df()
-        except Exception as e:
-            logger.error(f"Query failed: {e}")
-            return pd.DataFrame()
-
-    def list_parquet_files(self, bucket: str, prefix: str = "") -> List[str]:
-        """List all Parquet files in a MinIO bucket/prefix using MinIO hook"""
-        try:
-            from utils.minio_hook import MinIOHook
-            minio = MinIOHook(bucket_name=bucket)
-            files = minio.list_files(prefix=prefix, suffix=".parquet")
-            return files
-        except Exception as e:
-            logger.warning(f"Failed to list parquet files: {e}")
-            return []
     
     def read_parquet_from_minio(
         self,
@@ -134,6 +94,57 @@ class DuckDBValidator:
         except Exception as e:
             logger.error(f"Failed to read from MinIO: {e}")
             return pd.DataFrame()
+    
+    def query_minio_parquet(
+        self,
+        bucket: str,
+        key_pattern: str,
+        select: Optional[List[str]] = None,
+        where_clause: Optional[str] = None,
+        group_by: Optional[List[str]] = None
+    ) -> pd.DataFrame:
+        """
+        Execute SQL query directly on Parquet files in MinIO.
+        This is TRUE schema-on-read - no download needed.
+        
+        Args:
+            bucket: MinIO bucket name
+            key_pattern: S3 key pattern (e.g., 'sales/*.parquet')
+            select: Columns to select
+            where_clause: WHERE clause (e.g., "sale_date > '2024-01-01'")
+            group_by: Columns to group by
+            
+        Returns:
+            DataFrame with query results
+        """
+        conn = self._get_connection()
+        
+        col_str = ", ".join(select) if select else "*"
+        query = f"SELECT {col_str} FROM read_parquet('s3://{bucket}/{key_pattern}')"
+        
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        
+        if group_by:
+            query += f" GROUP BY {', '.join(group_by)}"
+        
+        try:
+            result = conn.execute(query)
+            return result.df()
+        except Exception as e:
+            logger.error(f"Query failed: {e}")
+            return pd.DataFrame()
+
+    def list_parquet_files(self, bucket: str, prefix: str = "") -> List[str]:
+        """List all Parquet files in a MinIO bucket/prefix using MinIO hook"""
+        try:
+            from utils.minio_hook import MinIOHook
+            minio = MinIOHook(bucket_name=bucket)
+            files = minio.list_files(prefix=prefix, suffix=".parquet")
+            return files
+        except Exception as e:
+            logger.warning(f"Failed to list parquet files: {e}")
+            return []
     
     def validate_schema(
         self,
@@ -356,49 +367,9 @@ class DuckDBValidator:
             stats[col] = col_stats
         
         return stats
-    
-    def query_minio_parquet(
-        self,
-        bucket: str,
-        key_pattern: str,
-        where_clause: Optional[str] = None,
-        group_by: Optional[List[str]] = None,
-        select: Optional[List[str]] = None
-    ) -> pd.DataFrame:
-        """
-        Execute a query directly on Parquet files in MinIO.
-        
-        Args:
-            bucket: MinIO bucket
-            key_pattern: S3 key pattern (e.g., 'sales/*.parquet')
-            where_clause: WHERE clause (e.g., "sale_date > '2024-01-01'")
-            group_by: Columns to group by
-            select: Columns to select
-            
-        Returns:
-            DataFrame with query results
-        """
-        conn = self._get_connection()
-        
-        col_str = ", ".join(select) if select else "*"
-        
-        query = f"SELECT {col_str} FROM read_parquet('s3://{bucket}/{key_pattern}')"
-        
-        if where_clause:
-            query += f" WHERE {where_clause}"
-        
-        if group_by:
-            query += f" GROUP BY {', '.join(group_by)}"
-        
-        try:
-            result = conn.execute(query)
-            return result.df()
-        except Exception as e:
-            logger.error(f"Query failed: {e}")
-            return pd.DataFrame()
 
 
-def create_validator(minio_config: Dict[str, Any] = None) -> DuckDBValidator:
+def create_validator(minio_config: Optional[Dict[str, Any]] = None) -> DuckDBValidator:
     """Factory function to create a DuckDB validator."""
     return DuckDBValidator(minio_config)
 
@@ -407,7 +378,7 @@ def validate_parquet_from_minio(
     bucket: str,
     key_pattern: str,
     schema_spec: Dict[str, Any],
-    minio_config: Dict[str, Any] = None
+    minio_config: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Convenience function to validate Parquet files directly from MinIO.

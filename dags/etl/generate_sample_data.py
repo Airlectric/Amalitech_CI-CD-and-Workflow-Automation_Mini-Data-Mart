@@ -27,7 +27,8 @@ default_args = {
 
 
 def upload_to_minio(df, mode: str):
-    """Upload generated dataframe to MinIO"""
+    """Upload generated dataframe to MinIO using environment variables"""
+    import os
     import uuid
     import boto3
     from io import BytesIO
@@ -41,11 +42,16 @@ def upload_to_minio(df, mode: str):
     df.to_parquet(buffer, engine="pyarrow", compression="snappy", index=False)
     buffer.seek(0)
     
+    # Get MinIO config from environment variables
+    minio_endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
+    minio_access_key = os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("MINIO_ROOT_USER", "minio")
+    minio_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY") or os.getenv("MINIO_ROOT_PASSWORD", "minio123")
+    
     s3_client = boto3.client(
         's3',
-        endpoint_url="http://minio:9000",
-        aws_access_key_id="minio",
-        aws_secret_access_key="minio123",
+        endpoint_url=f"http://{minio_endpoint}",
+        aws_access_key_id=minio_access_key,
+        aws_secret_access_key=minio_secret_key,
     )
     
     s3_client.put_object(
