@@ -43,7 +43,7 @@ DATASET_SPECS = {
             "product_id", "product_name", "category", "sub_category", "quantity",
             "unit_price", "discount_percentage", "discount_amount", "gross_amount",
             "net_amount", "profit_margin", "payment_method", "payment_category",
-            "store_location", "region", "is_weekend", "is_holiday"
+            "store_location", "region", "is_weekend", "is_holiday", "ingest_date"
         ],
         "required_columns": ["transaction_id", "sale_date", "customer_id", "product_id", "quantity", "unit_price", "net_amount"],
         "unique_columns": ["transaction_id"],
@@ -59,6 +59,40 @@ DATASET_SPECS = {
 
 def get_dataset_spec(dataset: str) -> dict:
     return DATASET_SPECS.get(dataset, {})
+
+
+def check_schema_drift(df_columns: List[str], expected_columns: List[str]) -> dict:
+    """
+    Check for schema drift between incoming data and expected schema.
+    
+    Returns dict with:
+    - has_drift: bool - True if schema mismatch detected
+    - missing_columns: List[str] - columns expected but not in data
+    - extra_columns: List[str] - columns in data but not expected
+    - drift_details: str - human-readable description
+    """
+    actual_set = set(df_columns)
+    expected_set = set(expected_columns)
+    
+    missing_columns = list(expected_set - actual_set)
+    extra_columns = list(actual_set - expected_set)
+    
+    has_drift = len(missing_columns) > 0 or len(extra_columns) > 0
+    
+    drift_details = ""
+    if missing_columns:
+        drift_details += f"Missing columns: {', '.join(missing_columns)}. "
+    if extra_columns:
+        drift_details += f"Extra columns: {', '.join(extra_columns)}."
+    
+    return {
+        "has_drift": has_drift,
+        "missing_columns": missing_columns,
+        "extra_columns": extra_columns,
+        "drift_details": drift_details.strip(),
+        "expected_columns": expected_columns,
+        "actual_columns": df_columns
+    }
 
 
 default_args = {
@@ -144,7 +178,32 @@ with DAG(
                 total_rows_read += len(df)
 
                 spec = get_dataset_spec("sales")
+                expected_columns = spec.get("expected_columns", [])
                 
+                # Schema Drift Detection - Strict Mode
+                schema_drift = check_schema_drift(list(df.columns), expected_columns)
+                
+                if schema_drift["has_drift"]:
+                    drift_msg = schema_drift["drift_details"]
+                    logger.error(f"SCHEMA DRIFT DETECTED in {file_key}: {drift_msg}")
+                    
+                    # Update metadata with SCHEMA_DRIFT status
+                    pg_hook.update_metadata(
+                        file_key, 
+                        "sales", 
+                        "SCHEMA_DRIFT", 
+                        0, 
+                        error_message=f"Schema drift: {drift_msg}"
+                    )
+                    
+                    # Track for alerting
+                    errors.append(f"SCHEMA_DRIFT: {file_key} - {drift_msg}")
+                    
+                    # Skip this file entirely - don't process any rows
+                    logger.warning(f"Skipping file {file_key} due to schema drift. Update schema to process.")
+                    continue
+                
+                # If schema is valid, proceed with row-level validation
                 schema_valid = True
                 validation_result = {}
                 
@@ -152,12 +211,9 @@ with DAG(
                     validation_result = duckdb_validator.run_full_validation(df, spec)
                     schema_valid = validation_result.get("schema_valid", True)
                 except KeyError as e:
+                    # This shouldn't happen since we checked schema drift above
                     schema_valid = True
-                    logger.warning(f"Missing columns in file, will use row-level validation: {e}")
-                
-                if not schema_valid:
-                    error_msg = "; ".join(validation_result.get("errors", ["Unknown schema error"]))
-                    logger.warning(f"Schema issues detected, using row-level validation: {error_msg}")
+                    logger.warning(f"Unexpected column mismatch: {e}")
 
                 # Row-level validation - tag each row with error_reason
                 df["_validation_errors"] = None

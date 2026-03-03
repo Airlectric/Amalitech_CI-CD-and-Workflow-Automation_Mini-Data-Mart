@@ -222,20 +222,31 @@ def send_ingestion_alert(
     """Send ingestion pipeline alert email"""
     quarantine_rate = (quarantine_count / total_read * 100) if total_read > 0 else 0
     
+    # Check for schema drift errors specifically
+    schema_drift_errors = [e for e in errors if "SCHEMA_DRIFT" in e]
+    has_schema_drift = len(schema_drift_errors) > 0
+    other_errors = [e for e in errors if "SCHEMA_DRIFT" not in e]
+    
     no_data_processed = total_read == 0 and len(files_scanned) == 0
     has_errors = len(errors) > 0
     high_quarantine = quarantine_rate > 50
     
-    if no_data_processed:
+    # Schema drift takes highest priority
+    if has_schema_drift:
+        subject_prefix = "[CRITICAL] SCHEMA DRIFT DETECTED"
+        status_color = "#8B0000"  # Dark red
+        status_text = "SCHEMA DRIFT - FILES SKIPPED"
+        severity = AlertSeverity.CRITICAL
+    elif no_data_processed:
         subject_prefix = "[INFO] SKIPPED"
         status_color = "#718096"
         status_text = "NO DATA - All files already processed"
         severity = AlertSeverity.INFO
     elif has_errors:
-        subject_prefix = "[CRITICAL] FAILED"
-        status_color = "#c53030"
-        status_text = "FAILED"
-        severity = AlertSeverity.CRITICAL
+        subject_prefix = "[WARNING] COMPLETED WITH ERRORS"
+        status_color = "#d69e2e"
+        status_text = "COMPLETED WITH ERRORS"
+        severity = AlertSeverity.WARNING
     elif high_quarantine:
         subject_prefix = "[WARNING] HIGH QUARANTINE"
         status_color = "#d69e2e"
@@ -255,7 +266,25 @@ def send_ingestion_alert(
     subject = f"{subject_prefix} Ingestion Alert - {run_id[:8]}"
     
     files_html = "".join([f"<li><code>{f}</code></li>" for f in files_scanned[:10]]) if files_scanned else "<li>No files to process</li>"
-    errors_html = "".join([f"<li><code>{e}</code></li>" for e in errors[:5]]) if errors else "<li>No errors</li>"
+    
+    # Separate schema drift errors from other errors
+    schema_drift_html = ""
+    if schema_drift_errors:
+        schema_drift_html = """
+        <h3 style="color: #8B0000; background: #ffe6e6; padding: 10px; border-radius: 5px;">
+            SCHEMA DRIFT ERRORS (Files Skipped)
+        </h3>
+        <ul style="background: #ffe6e6; padding: 15px; border-radius: 5px; color: #8B0000;">
+        """ + "".join([f"<li><code>{e}</code></li>" for e in schema_drift_errors]) + """
+        </ul>
+        <p style="color: #8B0000;">
+            <strong>Action Required:</strong> Update the data source schema or DATASET_SPECS in ingest_bronze_to_silver.py to process these files.
+        </p>
+        """
+    
+    other_errors_html = "".join([f"<li><code>{e}</code></li>" for e in other_errors[:5]]) if other_errors else "<li>No errors</li>"
+    
+    errors_html = other_errors_html
     
     html_body = f"""
     <html>
@@ -289,6 +318,8 @@ def send_ingestion_alert(
             </tr>
         </table>
         
+        {schema_drift_html}
+        
         <h3>Files Processed:</h3>
         <ul style="background: #f7fafc; padding: 15px; border-radius: 5px;">
             {files_html}
@@ -306,6 +337,13 @@ def send_ingestion_alert(
     </body>
     </html>
     """
+    
+    # Replace placeholder in html_body
+    html_body = html_body.format(
+        schema_drift_html=schema_drift_html,
+        files_html=files_html,
+        errors_html=errors_html
+    )
     
     return send_throttled_alert(subject, html_body, recipient, severity, "ingestion")
 

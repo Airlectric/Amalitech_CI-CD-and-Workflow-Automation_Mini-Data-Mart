@@ -2,6 +2,7 @@ from datetime import datetime
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
+from airflow.operators.empty import EmptyOperator
 import logging
 import sys
 import importlib.util
@@ -36,7 +37,7 @@ default_args = {
 with DAG(
     dag_id="data_quality_checks",
     start_date=datetime(2026, 1, 1),
-    schedule="0 6 * * *",
+    schedule="0 */6 * * *",
     default_args=default_args,
     catchup=False,
     max_active_runs=1,
@@ -148,7 +149,7 @@ with DAG(
             ON metadata.quality_baselines (table_name, metric_name, recorded_at)
         """)
         
-        tables = ["sales", "customers", "products"]
+        tables = ["sales"]  # Only check incoming data (fact table) for drift, not dimensions (rebuilt from sales)
         drift_results = {}
         DRIFT_THRESHOLD_PCT = 10.0
         
@@ -591,19 +592,33 @@ with DAG(
             "replayed": replayed,
         }
 
-        # Get PDF report path from docs_info
-        pdf_path = docs_info.get("report_file") if isinstance(docs_info, dict) else None
+        # Quarantine pending records DON'T block silver_to_gold - they're already filtered from silver.sales
+        # Just alert the team so they can run remediation
+        has_quarantine_issues = pending > 0
 
-        result = send_data_quality_alert(
-            quarantine_stats=quarantine_stats,
-            profiling_results=profiling_results,
-            drift_results=drift_results,
-            recipient=ALERT_EMAIL,
-            attachment_path=pdf_path
+        quality_passed = (
+            all(not r.get("drift_detected", False) for r in drift_results.values()) and
+            all(r.get("success", True) for r in profiling_results.values())
         )
 
-        logger.info(f"Email send result: {result}")
-        return result
+        logger.info(f"Quality check result: {'PASSED' if quality_passed else 'FAILED'}")
+        logger.info(f"Quarantine pending: {pending} (does NOT block silver_to_gold - just alerts)")
+
+        # Only send alert if there are issues (skip on success to reduce noise)
+        if not quality_passed or has_quarantine_issues:
+            pdf_path = docs_info.get("report_file") if isinstance(docs_info, dict) else None
+
+            result = send_data_quality_alert(
+                quarantine_stats=quarantine_stats,
+                profiling_results=profiling_results,
+                drift_results=drift_results,
+                recipient=ALERT_EMAIL,
+                attachment_path=pdf_path
+            )
+            logger.info(f"Email send result: {result}")
+        
+        logger.info(f"Quality passed: {quality_passed}")
+        return {"quality_passed": quality_passed}
 
     # Dependencies
     # Phase 1: Run all quality checks in parallel
@@ -625,7 +640,7 @@ with DAG(
     )
 
     # Send alerts AFTER everything Phase 3: is done
-    send_alerts(
+    send_alerts_result = send_alerts(
         quarantine_results=quarantine_results,
         profiling_results=profiling_results,
         drift_results=drift_results,
@@ -634,3 +649,33 @@ with DAG(
         integrity_results=integrity_results,
         docs_info=docs_info
     )
+
+    from airflow.sensors.external_task import ExternalTaskMarker
+
+    quality_complete = EmptyOperator(task_id="quality_complete")
+
+    @task.branch
+    def check_quality_result(alert_result):
+        """Branch based on quality check result"""
+        quality_passed = alert_result.get("quality_passed", False)
+        if quality_passed:
+            return "mark_silver_ready"
+        else:
+            logger.warning("Quality checks FAILED - skipping silver_to_gold")
+            return "quality_failed"
+
+    quality_branch = check_quality_result(send_alerts_result)
+
+    quality_failed = EmptyOperator(
+        task_id="quality_failed",
+        trigger_rule="none_skipped"
+    )
+
+    mark_silver_ready = ExternalTaskMarker(
+        task_id="mark_silver_ready",
+        external_dag_id="silver_to_gold",
+        external_task_id="quality_passed",
+    )
+
+    send_alerts_result >> quality_complete >> quality_branch
+    quality_branch >> [mark_silver_ready, quality_failed]

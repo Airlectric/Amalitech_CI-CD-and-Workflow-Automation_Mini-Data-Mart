@@ -1,10 +1,9 @@
 from datetime import datetime, timedelta
-from typing import Optional
 
 from airflow import DAG
 from airflow.decorators import task
-from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.models import Variable
+from airflow.operators.empty import EmptyOperator
 
 import sys
 sys.path.insert(0, "/opt/airflow/dags")
@@ -31,24 +30,18 @@ default_args = {
 with DAG(
     dag_id="silver_to_gold",
     start_date=datetime(2026, 1, 1),
-    schedule="0 */6 * * *",
+    schedule=None,
     default_args=default_args,
     catchup=False,
     max_active_runs=1,
     tags=["etl", "silver", "gold", "star-schema", "aggregation"],
-    description="Build star schema: Silver dimensions → Gold facts"
+    description="Build star schema: Silver dimensions → Gold facts. Triggered by data_quality_checks after quality passes."
 ) as dag:
 
-    wait_for_quality_checks = ExternalTaskSensor(
-        task_id="wait_for_quality_checks",
-        external_dag_id="data_quality_checks",
-        external_task_id="send_alerts",
-        allowed_states=["success"],
-        failed_states=["failed", "upstream_failed"],
-        timeout=7200,
-        poke_interval=60,
+    quality_passed = EmptyOperator(
+        task_id="quality_passed",
     )
-
+    
     @task
     def populate_silver_customers():
         """Populate silver.customers dimension from sales (Star Schema)"""
@@ -373,9 +366,9 @@ with DAG(
     category_insights = aggregate_category_insights()
 
     # Set dependencies: quality gate must pass first, then dimensions before facts
-    wait_for_quality_checks >> [customers, products]
-    customers.set_upstream(wait_for_quality_checks)
-    products.set_upstream(wait_for_quality_checks)
+    quality_passed >> [customers, products]
+    customers.set_upstream(quality_passed)
+    products.set_upstream(quality_passed)
     daily_sales.set_upstream([customers, products])
     product_perf.set_upstream([customers, products])
     store_perf.set_upstream([customers, products])
