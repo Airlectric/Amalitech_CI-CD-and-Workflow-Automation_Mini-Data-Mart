@@ -89,42 +89,37 @@ def format_failure_email(
     failed_sources: dict,
     source_files: list,
     timestamp: str,
-    run_id: str
+    run_id: str,
 ) -> str:
     """Format the failure email with all data"""
 
     failure_rows = ""
     for f in failed_details:
-        table = f.get('table', 'N/A')
-        column = f.get('column', 'N/A')
-        check = f.get('check', 'N/A')
-        details = f.get('details', {})
+        table = f.get("table", "N/A")
+        column = f.get("column", "N/A")
+        check = f.get("check", "N/A")
+        details = f.get("details", {})
 
         key = f"{table}.{column}"
         sources = failed_sources.get(key, [])
         if sources:
-            source_str = ", ".join([
-                f"{s.get('ingest_date','?')} ({s.get('bad_record_count',0)} bad)"
-                for s in sources
-            ])
+            source_str = ", ".join(
+                [f"{s.get('ingest_date', '?')} ({s.get('bad_record_count', 0)} bad)" for s in sources]
+            )
         else:
             source_str = "N/A"
 
-        if check == 'not_null':
+        if check == "not_null":
             issue = f"Null count: {details.get('null_count', 'N/A')}"
-        elif check == 'uniqueness':
+        elif check == "uniqueness":
             issue = f"Duplicates: {details.get('duplicate_count', 'N/A')}"
-        elif check == 'value_range':
+        elif check == "value_range":
             issue = f"Issues: {len(details.get('issues', []))}"
         else:
             issue = str(details)
 
         failure_rows += SIMPLE_FAILURE_ROW.format(
-            table=table,
-            column=column,
-            check=check,
-            issue=issue,
-            source=source_str
+            table=table, column=column, check=check, issue=issue, source=source_str
         )
 
     if not failure_rows:
@@ -133,8 +128,7 @@ def format_failure_email(
     source_list = ""
     for sf in source_files[:5]:
         source_list += SIMPLE_SOURCE_ITEM.format(
-            file_path=sf.get('file_path', 'N/A'),
-            ingest_date=sf.get('ingest_date', 'N/A')
+            file_path=sf.get("file_path", "N/A"), ingest_date=sf.get("ingest_date", "N/A")
         )
 
     if not source_list:
@@ -148,5 +142,5 @@ def format_failure_email(
         failure_rows=failure_rows,
         source_list=source_list,
         timestamp=timestamp,
-        run_id=run_id
+        run_id=run_id,
     )

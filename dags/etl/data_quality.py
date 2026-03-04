@@ -1,9 +1,9 @@
+import logging
 from datetime import datetime
+
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
-import logging
-
 from utils.email_utils import send_data_quality_alert
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ with DAG(
     @task
     def validate_quarantine_patterns():
         from utils.postgres_hook import PostgresLayerHook
+
         pg_hook = PostgresLayerHook()
 
         logger.info("Validating quarantine patterns")
@@ -70,6 +71,7 @@ with DAG(
     @task
     def profile_silver():
         from utils.postgres_hook import PostgresLayerHook
+
         pg_hook = PostgresLayerHook()
 
         logger.info("Profiling Silver tables")
@@ -92,11 +94,7 @@ with DAG(
                 else:
                     row_count = 0
 
-                profiling_results[table] = {
-                    "success": True,
-                    "row_count": row_count,
-                    "populated": row_count > 0
-                }
+                profiling_results[table] = {"success": True, "row_count": row_count, "populated": row_count > 0}
                 logger.info(f"Profiled {table}: {row_count} rows (populated={row_count > 0})")
 
             except Exception as e:
@@ -112,6 +110,7 @@ with DAG(
         Creates baseline if none exists, then compares against baseline from 24 hours ago.
         """
         from utils.postgres_hook import PostgresLayerHook
+
         pg_hook = PostgresLayerHook()
 
         logger.info("Detecting drift against historical baselines")
@@ -130,7 +129,7 @@ with DAG(
                     "baseline_count": 0,
                     "change_pct": 0,
                     "threshold_pct": DRIFT_THRESHOLD_PCT,
-                    "status": "not_populated"
+                    "status": "not_populated",
                 }
                 logger.info(f"Skipping {table}: not yet populated")
                 continue
@@ -139,7 +138,8 @@ with DAG(
                 current_count = profiling_results.get(table, {}).get("row_count", 0)
 
                 # Get baseline from 24 hours ago (most recent baseline before 24 hours ago)
-                baseline_result = pg_hook.execute_query("""
+                baseline_result = pg_hook.execute_query(
+                    """
                     SELECT metric_value
                     FROM metadata.quality_baselines
                     WHERE table_name = %s
@@ -147,7 +147,9 @@ with DAG(
                       AND recorded_at < NOW() - INTERVAL '24 hours'
                     ORDER BY recorded_at DESC
                     LIMIT 1
-                """, (table,))
+                """,
+                    (table,),
+                )
 
                 if baseline_result and len(baseline_result) > 1 and baseline_result[1]:
                     baseline_count = float(baseline_result[1][0][0])
@@ -168,17 +170,22 @@ with DAG(
                     "baseline_count": int(baseline_count),
                     "change_pct": round(change_pct, 2),
                     "threshold_pct": DRIFT_THRESHOLD_PCT,
-                    "status": "drift_alert" if drift_detected else "normal"
+                    "status": "drift_alert" if drift_detected else "normal",
                 }
 
                 # Store current count as new baseline
-                pg_hook.execute_query("""
+                pg_hook.execute_query(
+                    """
                     INSERT INTO metadata.quality_baselines (table_name, metric_name, metric_value)
                     VALUES (%s, 'row_count', %s)
-                """, (table, current_count))
+                """,
+                    (table, current_count),
+                )
 
-                logger.info(f"Drift check {table}: current={current_count}, baseline={int(baseline_count)}, "
-                           f"change={change_pct:.2f}%, drift={drift_detected}")
+                logger.info(
+                    f"Drift check {table}: current={current_count}, baseline={int(baseline_count)}, "
+                    f"change={change_pct:.2f}%, drift={drift_detected}"
+                )
 
             except Exception as e:
                 drift_results[table] = {"drift_detected": False, "error": str(e)}
@@ -197,7 +204,7 @@ with DAG(
         critical_columns = {
             "silver.sales": ["transaction_id", "customer_id", "product_id", "sale_date", "net_amount"],
             "silver.customers": ["customer_id", "customer_name"],
-            "silver.products": ["product_id", "product_name", "category"]
+            "silver.products": ["product_id", "product_name", "category"],
         }
 
         completeness_results = {}
@@ -226,7 +233,7 @@ with DAG(
 
                     table_results[col] = {
                         "completeness_pct": completeness_pct,
-                        "passes_threshold": completeness_pct >= COMPLETENESS_THRESHOLD
+                        "passes_threshold": completeness_pct >= COMPLETENESS_THRESHOLD,
                     }
                     logger.info(f"{table}.{col}: {completeness_pct}% complete (threshold: {COMPLETENESS_THRESHOLD}%)")
 
@@ -241,8 +248,8 @@ with DAG(
     @task
     def check_freshness():
         """Check if data is arriving within expected SLA"""
+
         from utils.postgres_hook import PostgresLayerHook
-        from datetime import datetime, timedelta
 
         pg_hook = PostgresLayerHook()
         logger.info("Checking data freshness")
@@ -261,19 +268,21 @@ with DAG(
             if result and len(result) > 1 and result[1]:
                 row = result[1][0]
                 if isinstance(row, dict):
-                    hours_since_update = float(row.get("hours_since_update", 0) or 0) if row.get("hours_since_update") else float('inf')
+                    hours_since_update = (
+                        float(row.get("hours_since_update", 0) or 0) if row.get("hours_since_update") else float("inf")
+                    )
                 else:
-                    hours_since_update = float(row[2]) if row and len(row) > 2 and row[2] else float('inf')
+                    hours_since_update = float(row[2]) if row and len(row) > 2 and row[2] else float("inf")
             else:
-                hours_since_update = float('inf')
+                hours_since_update = float("inf")
 
             is_fresh = hours_since_update <= FRESHNESS_SLA_HOURS
 
             freshness_result = {
                 "is_fresh": is_fresh,
-                "hours_since_update": round(hours_since_update, 2) if hours_since_update != float('inf') else None,
+                "hours_since_update": round(hours_since_update, 2) if hours_since_update != float("inf") else None,
                 "sla_hours": FRESHNESS_SLA_HOURS,
-                "status": "ok" if is_fresh else "stale_data_alert"
+                "status": "ok" if is_fresh else "stale_data_alert",
             }
             logger.info(f"Freshness check: {freshness_result}")
             return freshness_result
@@ -302,7 +311,11 @@ with DAG(
             """)
 
             if orphan_customers and len(orphan_customers) > 1 and orphan_customers[1]:
-                orphan_customer_count = orphan_customers[1][0][0] if isinstance(orphan_customers[1][0], tuple) else orphan_customers[1][0].get("orphan_count", 0)
+                orphan_customer_count = (
+                    orphan_customers[1][0][0]
+                    if isinstance(orphan_customers[1][0], tuple)
+                    else orphan_customers[1][0].get("orphan_count", 0)
+                )
                 if isinstance(orphan_customer_count, dict):
                     orphan_customer_count = orphan_customer_count.get("orphan_count", 0)
             else:
@@ -325,7 +338,11 @@ with DAG(
             """)
 
             if orphan_products and len(orphan_products) > 1 and orphan_products[1]:
-                orphan_product_count = orphan_products[1][0][0] if isinstance(orphan_products[1][0], tuple) else orphan_products[1][0].get("orphan_count", 0)
+                orphan_product_count = (
+                    orphan_products[1][0][0]
+                    if isinstance(orphan_products[1][0], tuple)
+                    else orphan_products[1][0].get("orphan_count", 0)
+                )
                 if isinstance(orphan_product_count, dict):
                     orphan_product_count = orphan_product_count.get("orphan_count", 0)
             else:
@@ -348,14 +365,15 @@ with DAG(
         drift_results=None,
         completeness_results=None,
         freshness_results=None,
-        integrity_results=None
+        integrity_results=None,
     ):
         import os
         from datetime import datetime
+
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import letter
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
         logger.info("Generating Data Quality Report")
 
@@ -370,57 +388,65 @@ with DAG(
         elements = []
 
         # Title
-        title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=20, spaceAfter=20)
+        title_style = ParagraphStyle("Title", parent=styles["Heading1"], fontSize=20, spaceAfter=20)
         elements.append(Paragraph("Data Quality Report", title_style))
-        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
         elements.append(Spacer(1, 20))
 
         # Quarantine Summary
-        elements.append(Paragraph("Quarantine Summary", styles['Heading2']))
+        elements.append(Paragraph("Quarantine Summary", styles["Heading2"]))
         q_data = [
-            ['Metric', 'Value'],
-            ['Total Rows', str(quarantine_results.get('total_rows', 'N/A') if quarantine_results else 'N/A')],
-            ['Null IDs', str(quarantine_results.get('null_ids', 'N/A') if quarantine_results else 'N/A')],
-            ['Null Payloads', str(quarantine_results.get('null_payloads', 'N/A') if quarantine_results else 'N/A')],
-            ['Null Errors', str(quarantine_results.get('null_errors', 'N/A') if quarantine_results else 'N/A')],
+            ["Metric", "Value"],
+            ["Total Rows", str(quarantine_results.get("total_rows", "N/A") if quarantine_results else "N/A")],
+            ["Null IDs", str(quarantine_results.get("null_ids", "N/A") if quarantine_results else "N/A")],
+            ["Null Payloads", str(quarantine_results.get("null_payloads", "N/A") if quarantine_results else "N/A")],
+            ["Null Errors", str(quarantine_results.get("null_errors", "N/A") if quarantine_results else "N/A")],
         ]
         q_table = Table(q_data, colWidths=[200, 200])
-        q_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
+        q_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.green),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
         elements.append(q_table)
         elements.append(Spacer(1, 20))
 
         # Silver Tables Profiling
-        elements.append(Paragraph("Silver Tables Profiling", styles['Heading2']))
-        p_data = [['Table', 'Row Count', 'Status']]
+        elements.append(Paragraph("Silver Tables Profiling", styles["Heading2"]))
+        p_data = [["Table", "Row Count", "Status"]]
         if profiling_results:
             for table, data in profiling_results.items():
                 status = "OK" if data.get("success") else "FAILED"
                 p_data.append([table, str(data.get("row_count", 0)), status])
 
         p_table = Table(p_data, colWidths=[150, 150, 100])
-        p_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
+        p_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.green),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
         elements.append(p_table)
         elements.append(Spacer(1, 20))
 
         # Drift Detection
-        elements.append(Paragraph("Drift Detection", styles['Heading2']))
-        d_data = [['Table', 'Drift Detected', 'Change %']]
+        elements.append(Paragraph("Drift Detection", styles["Heading2"]))
+        d_data = [["Table", "Drift Detected", "Change %"]]
         if drift_results:
             for table, data in drift_results.items():
                 drift = "YES" if data.get("drift_detected", False) else "NO"
@@ -428,21 +454,25 @@ with DAG(
                 d_data.append([table, drift, change_pct])
 
         d_table = Table(d_data, colWidths=[150, 150, 100])
-        d_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
+        d_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.green),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
         elements.append(d_table)
         elements.append(Spacer(1, 20))
 
         # Completeness Check
-        elements.append(Paragraph("Data Completeness", styles['Heading2']))
-        c_data = [['Table.Column', 'Completeness %', 'Status']]
+        elements.append(Paragraph("Data Completeness", styles["Heading2"]))
+        c_data = [["Table.Column", "Completeness %", "Status"]]
         if completeness_results:
             for table, cols in completeness_results.items():
                 for col, stats in cols.items():
@@ -451,61 +481,70 @@ with DAG(
                     c_data.append([f"{table}.{col}", pct, status])
 
         c_table = Table(c_data, colWidths=[200, 120, 80])
-        c_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.green),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
+        c_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.green),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
         elements.append(c_table)
         elements.append(Spacer(1, 20))
 
         # Freshness Check
-        elements.append(Paragraph("Data Freshness", styles['Heading2']))
+        elements.append(Paragraph("Data Freshness", styles["Heading2"]))
         if freshness_results:
             f_status = "FRESH" if freshness_results.get("is_fresh", False) else "STALE"
             f_hours = freshness_results.get("hours_since_update")
             f_sla = freshness_results.get("sla_hours", "N/A")
             f_data = [
-                ['Status', f_status],
-                ['Hours Since Update', str(f_hours) if f_hours else "N/A"],
-                ['SLA (hours)', str(f_sla)]
+                ["Status", f_status],
+                ["Hours Since Update", str(f_hours) if f_hours else "N/A"],
+                ["SLA (hours)", str(f_sla)],
             ]
             f_table = Table(f_data, colWidths=[200, 200])
-            f_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.green),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ]))
+            f_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.green),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                        ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                        ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                    ]
+                )
+            )
             elements.append(f_table)
             elements.append(Spacer(1, 20))
 
         # Referential Integrity Check
-        elements.append(Paragraph("Referential Integrity", styles['Heading2']))
+        elements.append(Paragraph("Referential Integrity", styles["Heading2"]))
         if integrity_results:
             i_valid = "VALID" if integrity_results.get("integrity_valid", True) else "INVALID"
             i_issues = integrity_results.get("issues", [])
-            i_data = [
-                ['Status', i_valid],
-                ['Issues', ', '.join(i_issues) if i_issues else 'None']
-            ]
+            i_data = [["Status", i_valid], ["Issues", ", ".join(i_issues) if i_issues else "None"]]
             i_table = Table(i_data, colWidths=[200, 300])
-            i_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.green),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ]))
+            i_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.green),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                        ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                        ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                    ]
+                )
+            )
             elements.append(i_table)
 
         # Build PDF
@@ -524,11 +563,12 @@ with DAG(
         docs_info,
         completeness_results=None,
         freshness_results=None,
-        integrity_results=None
+        integrity_results=None,
     ):
         logger.info("Evaluating quality results for alerting")
 
         from utils.postgres_hook import PostgresLayerHook
+
         pg_hook = PostgresLayerHook()
 
         q_result = pg_hook.execute_query("""
@@ -549,7 +589,9 @@ with DAG(
                 rejected = row.get("rejected", 0)
                 dead_letter = row.get("dead_letter", 0)
             else:
-                total, pending, remediated, rejected, dead_letter = row if len(row) == 5 else (row[0] if row else 0, 0, 0, 0, 0)
+                total, pending, remediated, rejected, dead_letter = (
+                    row if len(row) == 5 else (row[0] if row else 0, 0, 0, 0, 0)
+                )
         else:
             total = pending = remediated = rejected = dead_letter = 0
 
@@ -587,8 +629,12 @@ with DAG(
             has_integrity_issues = True
 
         has_any_issues = (
-            has_quarantine_issues or has_drift_issues or has_profiling_issues
-            or has_completeness_issues or has_freshness_issues or has_integrity_issues
+            has_quarantine_issues
+            or has_drift_issues
+            or has_profiling_issues
+            or has_completeness_issues
+            or has_freshness_issues
+            or has_integrity_issues
         )
 
         logger.info(
@@ -605,7 +651,7 @@ with DAG(
                 profiling_results=profiling_results,
                 drift_results=drift_results,
                 recipient=ALERT_EMAIL,
-                attachment_path=pdf_path
+                attachment_path=pdf_path,
             )
             logger.info(f"Alert email sent: {result}")
         else:
@@ -630,12 +676,7 @@ with DAG(
 
     # Phase 2: Generate data docs AFTER quality checks complete
     docs_info = generate_data_docs(
-        quarantine_results,
-        profiling_results,
-        drift_results,
-        completeness_results,
-        freshness_results,
-        integrity_results
+        quarantine_results, profiling_results, drift_results, completeness_results, freshness_results, integrity_results
     )
 
     # Phase 3: Send alerts AFTER everything is done
@@ -646,5 +687,5 @@ with DAG(
         completeness_results=completeness_results,
         freshness_results=freshness_results,
         integrity_results=integrity_results,
-        docs_info=docs_info
+        docs_info=docs_info,
     )

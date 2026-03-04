@@ -5,24 +5,25 @@ This module provides a central location for all configuration values
 used across the data platform. Values can be overridden via
 environment variables or Airflow Variables.
 """
+
 import os
 from dataclasses import dataclass
-from typing import Optional
-
 
 # ============================================================================
 # Data Quality Configuration
 # ============================================================================
 
+
 @dataclass
 class QualityConfig:
     """Data Quality check configuration"""
+
     DRIFT_THRESHOLD_PCT: float = 10.0
     COMPLETENESS_THRESHOLD_PCT: float = 95.0
     FRESHNESS_SLA_HOURS: int = 24
-    
+
     @classmethod
-    def from_environment(cls) -> 'QualityConfig':
+    def from_environment(cls) -> "QualityConfig":
         return cls(
             DRIFT_THRESHOLD_PCT=float(os.getenv("QUALITY_DRIFT_THRESHOLD", "10.0")),
             COMPLETENESS_THRESHOLD_PCT=float(os.getenv("QUALITY_COMPLETENESS_THRESHOLD", "95.0")),
@@ -34,17 +35,19 @@ class QualityConfig:
 # Alert Configuration
 # ============================================================================
 
+
 @dataclass
 class AlertConfig:
     """Alert and notification configuration"""
+
     RETRY_MAX_ATTEMPTS: int = 3
     RETRY_BASE_DELAY_SECONDS: int = 2
     RETRY_MAX_DELAY_SECONDS: int = 60
     THROTTLE_WARNING_HOURS: int = 1
     THROTTLE_INFO_HOURS: int = 6
-    
+
     @classmethod
-    def from_environment(cls) -> 'AlertConfig':
+    def from_environment(cls) -> "AlertConfig":
         return cls(
             RETRY_MAX_ATTEMPTS=int(os.getenv("ALERT_RETRY_MAX_ATTEMPTS", "3")),
             RETRY_BASE_DELAY_SECONDS=int(os.getenv("ALERT_RETRY_BASE_DELAY", "2")),
@@ -58,17 +61,19 @@ class AlertConfig:
 # Database Configuration
 # ============================================================================
 
+
 @dataclass
 class DatabaseConfig:
     """Database connection configuration"""
+
     HOST: str = "postgres"
     PORT: int = 5432
     DATABASE: str = "airflow"
     USERNAME: str = "airflow"
     PASSWORD: str = "airflow"
-    
+
     @classmethod
-    def from_environment(cls) -> 'DatabaseConfig':
+    def from_environment(cls) -> "DatabaseConfig":
         return cls(
             HOST=os.getenv("POSTGRES_HOST", "postgres"),
             PORT=int(os.getenv("POSTGRES_PORT", "5432")),
@@ -82,17 +87,19 @@ class DatabaseConfig:
 # MinIO Configuration
 # ============================================================================
 
+
 @dataclass
 class MinioConfig:
     """MinIO/S3 configuration"""
+
     ENDPOINT: str = "minio:9000"
     ACCESS_KEY: str = "minio"
     SECRET_KEY: str = "minio123"
     BUCKET: str = "bronze"
     USE_SSL: bool = False
-    
+
     @classmethod
-    def from_environment(cls) -> 'MinioConfig':
+    def from_environment(cls) -> "MinioConfig":
         return cls(
             ENDPOINT=os.getenv("MINIO_ENDPOINT", "minio:9000"),
             ACCESS_KEY=os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("MINIO_ROOT_USER", "minio"),
@@ -106,22 +113,26 @@ class MinioConfig:
 # SMTP Configuration
 # ============================================================================
 
+
 @dataclass
 class SmtpConfig:
     """SMTP email configuration"""
+
     HOST: str = "smtp.gmail.com"
     PORT: int = 587
     USER: str = ""
     PASSWORD: str = ""
-    
+
     @classmethod
-    def from_environment(cls) -> 'SmtpConfig':
+    def from_environment(cls) -> "SmtpConfig":
         user = os.getenv("AIRFLOW__SMTP__SMTP_USER", "")
         password = os.getenv("AIRFLOW__SMTP__SMTP_PASSWORD", "")
-        
+
         if not user or not password:
-            raise ValueError("SMTP credentials not configured. Set AIRFLOW__SMTP__SMTP_USER and AIRFLOW__SMTP__SMTP_PASSWORD")
-        
+            raise ValueError(
+                "SMTP credentials not configured. Set AIRFLOW__SMTP__SMTP_USER and AIRFLOW__SMTP__SMTP_PASSWORD"
+            )
+
         return cls(
             HOST=os.getenv("AIRFLOW__SMTP__SMTP_HOST", "smtp.gmail.com"),
             PORT=int(os.getenv("AIRFLOW__SMTP__SMTP_PORT", "587")),
@@ -134,16 +145,18 @@ class SmtpConfig:
 # Pipeline Configuration
 # ============================================================================
 
+
 @dataclass
 class PipelineConfig:
     """ETL pipeline configuration"""
+
     BATCH_SIZE: int = 1000
     QUARANTINE_BATCH_SIZE: int = 1000
     MAX_RETRIES: int = 3
     RETRY_DELAY_MINUTES: int = 5
-    
+
     @classmethod
-    def from_environment(cls) -> 'PipelineConfig':
+    def from_environment(cls) -> "PipelineConfig":
         return cls(
             BATCH_SIZE=int(os.getenv("PIPELINE_BATCH_SIZE", "1000")),
             QUARANTINE_BATCH_SIZE=int(os.getenv("QUARANTINE_BATCH_SIZE", "1000")),
@@ -167,7 +180,7 @@ METADATA_SCHEMA = "metadata"
 CRITICAL_COLUMNS = {
     "silver.sales": ["transaction_id", "customer_id", "product_id", "sale_date", "net_amount"],
     "silver.customers": ["customer_id", "customer_name"],
-    "silver.products": ["product_id", "product_name", "category"]
+    "silver.products": ["product_id", "product_name", "category"],
 }
 
 
@@ -175,13 +188,7 @@ CRITICAL_COLUMNS = {
 # Gold Layer Tables
 # ============================================================================
 
-GOLD_TABLES = [
-    "daily_sales",
-    "product_performance",
-    "customer_analytics",
-    "store_performance",
-    "category_insights"
-]
+GOLD_TABLES = ["daily_sales", "product_performance", "customer_analytics", "store_performance", "category_insights"]
 
 
 # ============================================================================
@@ -194,6 +201,7 @@ DEFAULT_ALERT_EMAIL = "daniel.doe@a2sv.org"
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
 
 def get_quality_config() -> QualityConfig:
     """Get quality configuration"""

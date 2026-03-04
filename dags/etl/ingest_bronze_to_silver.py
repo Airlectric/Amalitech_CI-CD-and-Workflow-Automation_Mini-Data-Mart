@@ -1,17 +1,14 @@
-from datetime import datetime, timedelta
-from typing import List, Optional
 import uuid
+from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
-
+from utils.duckdb_utils import create_validator
 from utils.email_utils import send_ingestion_alert
 from utils.minio_hook import MinIOHook
 from utils.postgres_hook import PostgresLayerHook
-from utils.duckdb_utils import DuckDBValidator, create_validator
-
 
 BRONZE_BUCKET = "bronze"
 SILVER_SCHEMA = "silver"
@@ -23,20 +20,46 @@ ALERT_EMAIL = Variable.get("alert_email", default_var="daniel.doe@a2sv.org")
 DATASET_SPECS = {
     "sales": {
         "expected_columns": [
-            "transaction_id", "sale_date", "sale_hour", "customer_id", "customer_name",
-            "product_id", "product_name", "category", "sub_category", "quantity",
-            "unit_price", "discount_percentage", "discount_amount", "gross_amount",
-            "net_amount", "profit_margin", "payment_method", "payment_category",
-            "store_location", "region", "is_weekend", "is_holiday", "ingest_date"
+            "transaction_id",
+            "sale_date",
+            "sale_hour",
+            "customer_id",
+            "customer_name",
+            "product_id",
+            "product_name",
+            "category",
+            "sub_category",
+            "quantity",
+            "unit_price",
+            "discount_percentage",
+            "discount_amount",
+            "gross_amount",
+            "net_amount",
+            "profit_margin",
+            "payment_method",
+            "payment_category",
+            "store_location",
+            "region",
+            "is_weekend",
+            "is_holiday",
+            "ingest_date",
         ],
-        "required_columns": ["transaction_id", "sale_date", "customer_id", "product_id", "quantity", "unit_price", "net_amount"],
+        "required_columns": [
+            "transaction_id",
+            "sale_date",
+            "customer_id",
+            "product_id",
+            "quantity",
+            "unit_price",
+            "net_amount",
+        ],
         "unique_columns": ["transaction_id"],
         "value_ranges": {
             "quantity": {"min": 1, "max": 1000},
             "unit_price": {"min": 0, "max": 100000},
-            "discount_percentage": {"min": 0, "max": 100}
+            "discount_percentage": {"min": 0, "max": 100},
         },
-        "silver_table": "sales"
+        "silver_table": "sales",
     }
 }
 
@@ -45,7 +68,7 @@ def get_dataset_spec(dataset: str) -> dict:
     return DATASET_SPECS.get(dataset, {})
 
 
-def check_schema_drift(df_columns: List[str], expected_columns: List[str]) -> dict:
+def check_schema_drift(df_columns: list[str], expected_columns: list[str]) -> dict:
     """
     Check for schema drift between incoming data and expected schema.
 
@@ -75,7 +98,7 @@ def check_schema_drift(df_columns: List[str], expected_columns: List[str]) -> di
         "extra_columns": extra_columns,
         "drift_details": drift_details.strip(),
         "expected_columns": expected_columns,
-        "actual_columns": df_columns
+        "actual_columns": df_columns,
     }
 
 
@@ -97,13 +120,14 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["etl", "bronze", "silver", "ingestion"],
-    description="Ingest data from Bronze (MinIO) to Silver (PostgreSQL) with DuckDB quality gate"
+    description="Ingest data from Bronze (MinIO) to Silver (PostgreSQL) with DuckDB quality gate",
 ) as dag:
 
     @task
     def discover_and_ingest():
-        import pandas as pd
         import logging
+
+        import pandas as pd
 
         logger = logging.getLogger(__name__)
 
@@ -148,10 +172,7 @@ with DAG(
 
                 logger.info(f"Reading {file_key} with DuckDB...")
 
-                df = duckdb_validator.read_parquet_from_minio(
-                    bucket=BRONZE_BUCKET,
-                    key_pattern=file_key
-                )
+                df = duckdb_validator.read_parquet_from_minio(bucket=BRONZE_BUCKET, key_pattern=file_key)
 
                 if df.empty:
                     logger.warning(f"No data read from {file_key}")
@@ -173,11 +194,7 @@ with DAG(
 
                     # Update metadata with SCHEMA_DRIFT status
                     pg_hook.update_metadata(
-                        file_key,
-                        "sales",
-                        "SCHEMA_DRIFT",
-                        0,
-                        error_message=f"Schema drift: {drift_msg}"
+                        file_key, "sales", "SCHEMA_DRIFT", 0, error_message=f"Schema drift: {drift_msg}"
                     )
 
                     # Track for alerting
@@ -188,15 +205,13 @@ with DAG(
                     continue
 
                 # If schema is valid, proceed with row-level validation
-                schema_valid = True
                 validation_result = {}
 
                 try:
                     validation_result = duckdb_validator.run_full_validation(df, spec)
-                    schema_valid = validation_result.get("schema_valid", True)
+                    validation_result.get("schema_valid", True)
                 except KeyError as e:
                     # This shouldn't happen since we checked schema drift above
-                    schema_valid = True
                     logger.warning(f"Unexpected column mismatch: {e}")
 
                 # Row-level validation - tag each row with error_reason
@@ -214,8 +229,8 @@ with DAG(
                     for col, range_spec in spec.get("value_ranges", {}).items():
                         val = row.get(col)
                         if pd.notna(val):
-                            min_val = range_spec.get("min", float('-inf'))
-                            max_val = range_spec.get("max", float('inf'))
+                            min_val = range_spec.get("min", float("-inf"))
+                            max_val = range_spec.get("max", float("inf"))
                             if val < min_val or val > max_val:
                                 errors_list.append(f"range:{col}")
 
@@ -241,11 +256,30 @@ with DAG(
                         "sales",
                         schema=SILVER_SCHEMA,
                         conflict_columns=["transaction_id"],
-                        update_columns=["sale_date", "sale_hour", "customer_id", "customer_name", "product_id",
-                                       "product_name", "category", "sub_category", "quantity", "unit_price",
-                                       "discount_percentage", "discount_amount", "gross_amount", "net_amount",
-                                       "profit_margin", "payment_method", "payment_category", "store_location",
-                                       "region", "is_weekend", "is_holiday", "ingest_date"]
+                        update_columns=[
+                            "sale_date",
+                            "sale_hour",
+                            "customer_id",
+                            "customer_name",
+                            "product_id",
+                            "product_name",
+                            "category",
+                            "sub_category",
+                            "quantity",
+                            "unit_price",
+                            "discount_percentage",
+                            "discount_amount",
+                            "gross_amount",
+                            "net_amount",
+                            "profit_margin",
+                            "payment_method",
+                            "payment_category",
+                            "store_location",
+                            "region",
+                            "is_weekend",
+                            "is_holiday",
+                            "ingest_date",
+                        ],
                     )
                     rows_to_silver = len(good_rows_clean)
                     total_rows_silver += rows_to_silver
@@ -255,27 +289,27 @@ with DAG(
                 if not bad_rows.empty:
                     quarantine_records = []
                     for idx, row in bad_rows.iterrows():
-                        quarantine_records.append({
-                            "id": idx,
-                            "payload": row.drop("_validation_errors").to_dict(),
-                            "error_reason": row["_validation_errors"],
-                            "source_file": file_key
-                        })
+                        quarantine_records.append(
+                            {
+                                "id": idx,
+                                "payload": row.drop("_validation_errors").to_dict(),
+                                "error_reason": row["_validation_errors"],
+                                "source_file": file_key,
+                            }
+                        )
 
-                    pg_hook.insert_quarantine(
-                        quarantine_records,
-                        "sales_failed",
-                        QUARANTINE_SCHEMA,
-                        run_id
-                    )
+                    pg_hook.insert_quarantine(quarantine_records, "sales_failed", QUARANTINE_SCHEMA, run_id)
                     rows_quarantined = len(quarantine_records)
                     total_rows_quarantined += rows_quarantined
 
                 pg_hook.update_metadata(file_key, "sales", "PROCESSED", rows_to_silver)
-                logger.info(f"Inserted {rows_to_silver} rows to Silver, {rows_quarantined} to Quarantine from {file_key}")
+                logger.info(
+                    f"Inserted {rows_to_silver} rows to Silver, {rows_quarantined} to Quarantine from {file_key}"
+                )
 
             except Exception as e:
                 import traceback
+
                 tb = traceback.format_exc()
                 logger.error(f"Error processing {file_key}: {e}\n{tb}")
                 pg_hook.update_metadata(file_key, "sales", "FAILED", 0, error_message=str(e))
@@ -290,10 +324,12 @@ with DAG(
             rows_written_silver=total_rows_silver,
             rows_quarantined=total_rows_quarantined,
             status="COMPLETED" if not errors else "COMPLETED_WITH_ERRORS",
-            files_scanned=files_scanned
+            files_scanned=files_scanned,
         )
 
-        logger.info(f"Ingestion run {run_id} completed: {total_rows_silver} to Silver, {total_rows_quarantined} to Quarantine")
+        logger.info(
+            f"Ingestion run {run_id} completed: {total_rows_silver} to Silver, {total_rows_quarantined} to Quarantine"
+        )
 
         send_ingestion_alert(
             run_id=run_id,
@@ -302,7 +338,7 @@ with DAG(
             quarantine_count=total_rows_quarantined,
             files_scanned=files_scanned,
             errors=errors,
-            recipient=ALERT_EMAIL
+            recipient=ALERT_EMAIL,
         )
 
         return {
@@ -310,7 +346,7 @@ with DAG(
             "records_silver": total_rows_silver,
             "records_quarantined": total_rows_quarantined,
             "records_read": total_rows_read,
-            "errors": errors
+            "errors": errors,
         }
 
     trigger_silver_to_gold = TriggerDagRunOperator(

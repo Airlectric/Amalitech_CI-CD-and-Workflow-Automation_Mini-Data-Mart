@@ -1,7 +1,7 @@
-import pytest
 import json
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 
 class TestRemediationDAGStructure:
@@ -9,18 +9,22 @@ class TestRemediationDAGStructure:
 
     def test_dag_imports(self):
         import remediation
+
         assert remediation is not None
 
     def test_dag_id(self):
         from remediation import dag
+
         assert dag.dag_id == "remediation_workflow"
 
     def test_dag_schedule_is_manual(self):
         from remediation import dag
+
         assert dag.schedule is None
 
     def test_dag_has_expected_tasks(self):
         from remediation import dag
+
         task_ids = [t.task_id for t in dag.tasks]
         assert "remediate_all_batches" in task_ids
         assert "send_remediation_notification" in task_ids
@@ -28,6 +32,7 @@ class TestRemediationDAGStructure:
 
     def test_default_args(self):
         from remediation import default_args
+
         assert default_args["owner"] == "airflow"
         assert default_args["retries"] == 1
         assert default_args["email_on_failure"] is True
@@ -38,100 +43,117 @@ class TestValidateRecords:
 
     def _get_validate(self):
         from remediation import _validate_records
+
         return _validate_records
 
     def test_valid_record(self):
         validate = self._get_validate()
-        records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": json.dumps({
-                "transaction_id": "TXN001",
-                "sale_date": "2026-01-01",
-                "product_id": "PROD001",
-                "quantity": 5,
-                "unit_price": 10.00,
-                "customer_id": "CUST001",
-            }),
-            "error_reason": "test",
-            "source_file": "test.parquet",
-            "failed_at": "2026-01-01",
-            "retry_count": 0,
-        }]
+        records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": json.dumps(
+                    {
+                        "transaction_id": "TXN001",
+                        "sale_date": "2026-01-01",
+                        "product_id": "PROD001",
+                        "quantity": 5,
+                        "unit_price": 10.00,
+                        "customer_id": "CUST001",
+                    }
+                ),
+                "error_reason": "test",
+                "source_file": "test.parquet",
+                "failed_at": "2026-01-01",
+                "retry_count": 0,
+            }
+        ]
         valid, invalid = validate(records)
         assert len(valid) == 1
         assert len(invalid) == 0
 
     def test_missing_fields(self):
         validate = self._get_validate()
-        records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": json.dumps({"transaction_id": "TXN001"}),
-            "error_reason": "test",
-            "source_file": "test.parquet",
-            "failed_at": "2026-01-01",
-            "retry_count": 0,
-        }]
+        records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": json.dumps({"transaction_id": "TXN001"}),
+                "error_reason": "test",
+                "source_file": "test.parquet",
+                "failed_at": "2026-01-01",
+                "retry_count": 0,
+            }
+        ]
         valid, invalid = validate(records)
         assert len(valid) == 0
         assert len(invalid) == 1
 
     def test_invalid_quantity(self):
         validate = self._get_validate()
-        records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": json.dumps({
-                "transaction_id": "TXN001",
-                "sale_date": "2026-01-01",
-                "product_id": "PROD001",
-                "quantity": -5,
-                "unit_price": 10.00,
-                "customer_id": "CUST001",
-            }),
-            "error_reason": "test",
-            "source_file": "test.parquet",
-            "failed_at": "2026-01-01",
-            "retry_count": 0,
-        }]
+        records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": json.dumps(
+                    {
+                        "transaction_id": "TXN001",
+                        "sale_date": "2026-01-01",
+                        "product_id": "PROD001",
+                        "quantity": -5,
+                        "unit_price": 10.00,
+                        "customer_id": "CUST001",
+                    }
+                ),
+                "error_reason": "test",
+                "source_file": "test.parquet",
+                "failed_at": "2026-01-01",
+                "retry_count": 0,
+            }
+        ]
         valid, invalid = validate(records)
         assert len(valid) == 0
         assert len(invalid) == 1
 
     def test_invalid_price(self):
         validate = self._get_validate()
-        records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": json.dumps({
-                "transaction_id": "TXN001",
-                "sale_date": "2026-01-01",
-                "product_id": "PROD001",
-                "quantity": 5,
-                "unit_price": -10.00,
-                "customer_id": "CUST001",
-            }),
-            "error_reason": "test",
-            "source_file": "test.parquet",
-            "failed_at": "2026-01-01",
-            "retry_count": 0,
-        }]
+        records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": json.dumps(
+                    {
+                        "transaction_id": "TXN001",
+                        "sale_date": "2026-01-01",
+                        "product_id": "PROD001",
+                        "quantity": 5,
+                        "unit_price": -10.00,
+                        "customer_id": "CUST001",
+                    }
+                ),
+                "error_reason": "test",
+                "source_file": "test.parquet",
+                "failed_at": "2026-01-01",
+                "retry_count": 0,
+            }
+        ]
         valid, invalid = validate(records)
         assert len(valid) == 0
         assert len(invalid) == 1
 
     def test_invalid_json_payload(self):
         validate = self._get_validate()
-        records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": "not valid json",
-            "error_reason": "test",
-            "source_file": "test.parquet",
-            "failed_at": "2026-01-01",
-            "retry_count": 0,
-        }]
+        records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": "not valid json",
+                "error_reason": "test",
+                "source_file": "test.parquet",
+                "failed_at": "2026-01-01",
+                "retry_count": 0,
+            }
+        ]
         valid, invalid = validate(records)
         assert len(valid) == 0
         assert len(invalid) == 1
@@ -142,6 +164,7 @@ class TestBatchReplay:
 
     def test_empty_input_returns_zeros(self):
         from remediation import _batch_replay
+
         fixed, failed, errors = _batch_replay(Mock(), [])
         assert fixed == 0
         assert failed == 0
@@ -158,30 +181,32 @@ class TestBatchReplay:
         mock_hook = Mock()
         mock_hook.get_conn.return_value = mock_conn
 
-        valid_records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": {
-                "transaction_id": "TXN001",
-                "sale_date": "2026-01-01",
-                "sale_hour": 10,
-                "customer_id": "CUST001",
-                "customer_name": "Test",
-                "product_id": "PROD001",
-                "product_name": "Widget",
-                "category": "Electronics",
-                "sub_category": "Gadgets",
-                "quantity": 5,
-                "unit_price": 10.00,
-                "discount_percentage": 0,
-                "payment_method": "Cash",
-                "payment_category": "Offline",
-                "store_location": "NYC",
-                "region": "Northeast",
-                "is_weekend": False,
-                "is_holiday": False,
-            },
-        }]
+        valid_records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": {
+                    "transaction_id": "TXN001",
+                    "sale_date": "2026-01-01",
+                    "sale_hour": 10,
+                    "customer_id": "CUST001",
+                    "customer_name": "Test",
+                    "product_id": "PROD001",
+                    "product_name": "Widget",
+                    "category": "Electronics",
+                    "sub_category": "Gadgets",
+                    "quantity": 5,
+                    "unit_price": 10.00,
+                    "discount_percentage": 0,
+                    "payment_method": "Cash",
+                    "payment_category": "Offline",
+                    "store_location": "NYC",
+                    "region": "Northeast",
+                    "is_weekend": False,
+                    "is_holiday": False,
+                },
+            }
+        ]
 
         fixed, failed, errors = _batch_replay(mock_hook, valid_records)
         assert fixed == 1
@@ -200,20 +225,22 @@ class TestBatchReplay:
         mock_hook = Mock()
         mock_hook.get_conn.return_value = mock_conn
 
-        valid_records = [{
-            "id": 1,
-            "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
-            "payload": {
-                "transaction_id": "TXN001",
-                "sale_date": "2026-01-01",
-                "sale_hour": 10,
-                "customer_id": "CUST001",
-                "product_id": "PROD001",
-                "quantity": 5,
-                "unit_price": 10.00,
-                "discount_percentage": 0,
-            },
-        }]
+        valid_records = [
+            {
+                "id": 1,
+                "ingestion_run_id": "00000000-0000-0000-0000-000000000001",
+                "payload": {
+                    "transaction_id": "TXN001",
+                    "sale_date": "2026-01-01",
+                    "sale_hour": 10,
+                    "customer_id": "CUST001",
+                    "product_id": "PROD001",
+                    "quantity": 5,
+                    "unit_price": 10.00,
+                    "discount_percentage": 0,
+                },
+            }
+        ]
 
         fixed, failed, errors = _batch_replay(mock_hook, valid_records)
         assert fixed == 0
@@ -226,6 +253,7 @@ class TestBatchReject:
 
     def test_empty_input(self):
         from remediation import _batch_reject
+
         result = _batch_reject(Mock(), [])
         assert result == 0
 
@@ -257,10 +285,7 @@ class TestGetQuarantineStats:
         from remediation import _get_quarantine_stats
 
         mock_hook = Mock()
-        mock_hook.execute_query.return_value = [
-            [],
-            [[100, 10, 80, 5, 5]]
-        ]
+        mock_hook.execute_query.return_value = [[], [[100, 10, 80, 5, 5]]]
 
         result = _get_quarantine_stats(mock_hook)
         assert result["total"] == 100
@@ -285,6 +310,7 @@ class TestRemediationIntegration:
     @pytest.mark.integration
     def test_quarantine_table_exists(self):
         import psycopg2
+
         conn = psycopg2.connect(host="localhost", port=5433, dbname="airflow", user="airflow", password="airflow")
         cursor = conn.cursor()
         cursor.execute("""
@@ -299,6 +325,7 @@ class TestRemediationIntegration:
     @pytest.mark.integration
     def test_quarantine_table_has_required_columns(self):
         import psycopg2
+
         conn = psycopg2.connect(host="localhost", port=5433, dbname="airflow", user="airflow", password="airflow")
         cursor = conn.cursor()
         cursor.execute("""
@@ -309,7 +336,15 @@ class TestRemediationIntegration:
         columns = [row[0] for row in cursor.fetchall()]
         conn.close()
 
-        required = ["id", "payload", "error_reason", "replayed", "replayed_at", "failed_at",
-                     "remediation_status", "retry_count"]
+        required = [
+            "id",
+            "payload",
+            "error_reason",
+            "replayed",
+            "replayed_at",
+            "failed_at",
+            "remediation_status",
+            "retry_count",
+        ]
         for col in required:
             assert col in columns, f"Column {col} not found in quarantine.sales_failed"

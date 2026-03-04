@@ -1,7 +1,4 @@
-import pytest
 import pandas as pd
-from unittest.mock import patch
-
 from generator import generate_sales_data, generate_schema_invalid_data
 
 

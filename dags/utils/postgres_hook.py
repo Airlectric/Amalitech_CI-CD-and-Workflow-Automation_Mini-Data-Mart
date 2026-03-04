@@ -1,27 +1,14 @@
-import os
 import json
-from typing import List, Optional, Any
+from typing import Any
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 
 class PostgresLayerHook(PostgresHook):
-    def __init__(
-        self,
-        postgres_conn_id: str = "postgres_default",
-        *args,
-        **kwargs
-    ):
-        super().__init__(postgres_conn_id=postgres_conn_id, *args, **kwargs)
+    def __init__(self, postgres_conn_id: str = "postgres_default", **kwargs):
+        super().__init__(postgres_conn_id=postgres_conn_id, **kwargs)
 
-    def insert_dataframe(
-        self,
-        df,
-        table: str,
-        schema: str = "silver",
-        if_exists: str = "append"
-    ):
-        full_table = f"{schema}.{table}"
+    def insert_dataframe(self, df, table: str, schema: str = "silver", if_exists: str = "append"):
         df.to_sql(
             table,
             self.get_sqlalchemy_engine(),
@@ -29,15 +16,11 @@ class PostgresLayerHook(PostgresHook):
             if_exists=if_exists,
             index=False,
             method="multi",
-            chunksize=1000
+            chunksize=1000,
         )
         return len(df)
 
-    def execute_query(
-        self,
-        query: str,
-        parameters: Optional[tuple] = None
-    ) -> List[tuple]:
+    def execute_query(self, query: str, parameters: tuple | None = None) -> list[tuple]:
         conn = self.get_conn()
         cursor = conn.cursor()
         try:
@@ -79,12 +62,7 @@ class PostgresLayerHook(PostgresHook):
             return result[1][0][0]
         return None
 
-    def bulk_insert(
-        self,
-        table: str,
-        rows: List[tuple],
-        schema: str = "silver"
-    ):
+    def bulk_insert(self, table: str, rows: list[tuple], schema: str = "silver"):
         if not rows:
             return 0
 
@@ -109,7 +87,7 @@ class PostgresLayerHook(PostgresHook):
         status: str,
         record_count: int = 0,
         checksum: str = None,
-        error_message: Optional[str] = None
+        error_message: str | None = None,
     ):
         query = """
             INSERT INTO metadata.ingestion_metadata
@@ -123,7 +101,7 @@ class PostgresLayerHook(PostgresHook):
         """
         self.execute_query(query, (file_path, dataset_name, status, record_count, checksum, error_message))
 
-    def get_processed_files(self, dataset: str) -> List[str]:
+    def get_processed_files(self, dataset: str) -> list[str]:
         """Return files in any terminal state so they are not re-read."""
         query = """
             SELECT file_path FROM metadata.ingestion_metadata
@@ -143,37 +121,37 @@ class PostgresLayerHook(PostgresHook):
         df,
         table: str,
         schema: str = "silver",
-        conflict_columns: List[str] = None,
-        update_columns: List[str] = None
+        conflict_columns: list[str] = None,
+        update_columns: list[str] = None,
     ):
         if df.empty:
             return 0
-        
+
         full_table = f"{schema}.{table}"
-        
+
         if conflict_columns is None:
             conflict_columns = ["transaction_id"]
-        
+
         columns = list(df.columns)
-        
+
         if update_columns is None:
             update_columns = [c for c in columns if c not in conflict_columns]
-        
+
         col_names = ",".join(columns)
         placeholders = ",".join(["%s"] * len(columns))
-        
+
         insert_sql = f"INSERT INTO {full_table} ({col_names}) VALUES ({placeholders})"
-        
+
         if update_columns:
             update_set = ",".join([f"{c} = EXCLUDED.{c}" for c in update_columns])
             upsert_sql = insert_sql + f" ON CONFLICT ({','.join(conflict_columns)}) DO UPDATE SET {update_set}"
         else:
             upsert_sql = insert_sql + f" ON CONFLICT ({','.join(conflict_columns)}) DO NOTHING"
-        
+
         conn = self.get_conn()
         cursor = conn.cursor()
         try:
-            records = [tuple(row[col] for col in columns) for row in df.to_dict('records')]
+            records = [tuple(row[col] for col in columns) for row in df.to_dict("records")]
             cursor.executemany(upsert_sql, records)
             conn.commit()
             return len(df)
@@ -181,52 +159,49 @@ class PostgresLayerHook(PostgresHook):
             cursor.close()
             conn.close()
 
-    def insert_quarantine(
-        self,
-        records: List[dict],
-        table: str,
-        schema: str = "quarantine",
-        run_id: str = None
-    ) -> int:
+    def insert_quarantine(self, records: list[dict], table: str, schema: str = "quarantine", run_id: str = None) -> int:
         """Insert bad records into quarantine table"""
         if not records:
             return 0
-        
+
         full_table = f"{schema}.{table}"
-        
+
         conn = self.get_conn()
         cursor = conn.cursor()
-        
+
         inserted = 0
         try:
             for record in records:
                 payload = record.get("payload", {})
                 payload_clean = {}
                 for k, v in payload.items():
-                    if hasattr(v, 'isoformat'):
+                    if hasattr(v, "isoformat"):
                         payload_clean[k] = v.isoformat()
                     elif v is None:
                         payload_clean[k] = None
-                    elif isinstance(v, float) and (str(v) == 'nan' or str(v) == 'NaN' or str(v) == 'inf'):
+                    elif isinstance(v, float) and (str(v) == "nan" or str(v) == "NaN" or str(v) == "inf"):
                         payload_clean[k] = None
                     else:
                         payload_clean[k] = v
-                
+
                 payload_json = json.dumps(payload_clean, allow_nan=False)
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     INSERT INTO {full_table}
                     (id, payload, error_reason, source_file, ingestion_run_id, failed_at)
                     VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (ingestion_run_id, id) DO NOTHING
-                """, (
-                    record.get("id", 0),
-                    payload_json,
-                    record.get("error_reason", "unknown"),
-                    record.get("source_file", ""),
-                    run_id
-                ))
+                """,
+                    (
+                        record.get("id", 0),
+                        payload_json,
+                        record.get("error_reason", "unknown"),
+                        record.get("source_file", ""),
+                        run_id,
+                    ),
+                )
                 inserted += cursor.rowcount
-            
+
             conn.commit()
             return inserted
         finally:
@@ -240,7 +215,7 @@ class PostgresLayerHook(PostgresHook):
         rows_written_silver: int = 0,
         rows_quarantined: int = 0,
         status: str = "COMPLETED",
-        files_scanned: List[str] = None
+        files_scanned: list[str] = None,
     ):
         """Update audit.ingestion_runs with final counts"""
         query = """
@@ -253,11 +228,4 @@ class PostgresLayerHook(PostgresHook):
                 files_scanned = %s
             WHERE ingestion_run_id = %s
         """
-        self.execute_query(query, (
-            rows_read,
-            rows_written_silver,
-            rows_quarantined,
-            status,
-            files_scanned,
-            run_id
-        ))
+        self.execute_query(query, (rows_read, rows_written_silver, rows_quarantined, status, files_scanned, run_id))

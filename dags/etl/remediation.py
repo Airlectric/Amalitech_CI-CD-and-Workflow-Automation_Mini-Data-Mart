@@ -2,13 +2,14 @@
 Remediation DAG for fixing quarantined records.
 Production-grade: batch operations, transactional consistency, dead-letter escalation.
 """
+
+import logging
 from datetime import datetime
+
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
-import logging
-
 from utils.email_utils import send_remediation_alert
 
 logger = logging.getLogger(__name__)
@@ -44,12 +45,12 @@ with DAG(
         Uses batch upsert, transactional consistency, and dead-letter escalation.
         Returns cumulative results across all batches.
         """
-        import json
         import logging
 
         logger = logging.getLogger(__name__)
 
         from utils.postgres_hook import PostgresLayerHook
+
         pg_hook = PostgresLayerHook()
 
         # Ensure new columns exist (migration for existing deployments)
@@ -176,25 +177,24 @@ with DAG(
         records = []
         if result[1]:
             for row in result[1]:
-                records.append({
-                    "id": row[0],
-                    "ingestion_run_id": str(row[1]),
-                    "payload": row[2],
-                    "error_reason": row[3],
-                    "source_file": row[4],
-                    "failed_at": row[5],
-                    "retry_count": row[6],
-                })
+                records.append(
+                    {
+                        "id": row[0],
+                        "ingestion_run_id": str(row[1]),
+                        "payload": row[2],
+                        "error_reason": row[3],
+                        "source_file": row[4],
+                        "failed_at": row[5],
+                        "retry_count": row[6],
+                    }
+                )
         return records
 
     def _validate_records(records):
         """Split records into valid (fixable) and invalid (unfixable)."""
         import json
 
-        required_fields = [
-            "transaction_id", "sale_date", "product_id", "quantity",
-            "unit_price", "customer_id"
-        ]
+        required_fields = ["transaction_id", "sale_date", "product_id", "quantity", "unit_price", "customer_id"]
 
         valid_records = []
         invalid_records = []
@@ -257,32 +257,34 @@ with DAG(
                     gross_amount = round(unit_price * quantity, 2)
                     net_amount = round(gross_amount - discount_amount, 2)
 
-                    silver_values.append((
-                        payload.get("transaction_id"),
-                        payload.get("sale_date"),
-                        payload.get("sale_hour", 0),
-                        payload.get("customer_id"),
-                        payload.get("customer_name", ""),
-                        payload.get("product_id"),
-                        payload.get("product_name", ""),
-                        payload.get("category", ""),
-                        payload.get("sub_category", ""),
-                        quantity,
-                        unit_price,
-                        discount_pct,
-                        discount_amount,
-                        gross_amount,
-                        net_amount,
-                        payload.get("profit_margin", 0),
-                        payload.get("payment_method", ""),
-                        payload.get("payment_category", ""),
-                        payload.get("store_location", ""),
-                        payload.get("region", ""),
-                        payload.get("is_weekend", False),
-                        payload.get("is_holiday", False),
-                        payload.get("ingest_date", datetime.now().date()),
-                        payload.get("source_file", ""),
-                    ))
+                    silver_values.append(
+                        (
+                            payload.get("transaction_id"),
+                            payload.get("sale_date"),
+                            payload.get("sale_hour", 0),
+                            payload.get("customer_id"),
+                            payload.get("customer_name", ""),
+                            payload.get("product_id"),
+                            payload.get("product_name", ""),
+                            payload.get("category", ""),
+                            payload.get("sub_category", ""),
+                            quantity,
+                            unit_price,
+                            discount_pct,
+                            discount_amount,
+                            gross_amount,
+                            net_amount,
+                            payload.get("profit_margin", 0),
+                            payload.get("payment_method", ""),
+                            payload.get("payment_category", ""),
+                            payload.get("store_location", ""),
+                            payload.get("region", ""),
+                            payload.get("is_weekend", False),
+                            payload.get("is_holiday", False),
+                            payload.get("ingest_date", datetime.now().date()),
+                            payload.get("source_file", ""),
+                        )
+                    )
                     quarantine_keys.append((record["ingestion_run_id"], record["id"]))
                 except Exception as e:
                     failed += 1
@@ -365,11 +367,13 @@ with DAG(
         try:
             values = []
             for record in invalid_records:
-                values.append((
-                    record.get("reject_reason", "unknown"),
-                    record["ingestion_run_id"],
-                    record["id"],
-                ))
+                values.append(
+                    (
+                        record.get("reject_reason", "unknown"),
+                        record["ingestion_run_id"],
+                        record["id"],
+                    )
+                )
 
             reject_sql = """
                 UPDATE quarantine.sales_failed
@@ -401,7 +405,8 @@ with DAG(
         cursor = conn.cursor()
 
         try:
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE quarantine.sales_failed
                 SET remediation_status = 'dead_letter',
                     replayed = TRUE,
@@ -410,7 +415,9 @@ with DAG(
                     error_reason = CONCAT(error_reason, ' | Dead-lettered after ', retry_count, ' retries')
                 WHERE remediation_status = 'pending'
                   AND retry_count >= %s
-            """, (MAX_RETRY_COUNT,))
+            """,
+                (MAX_RETRY_COUNT,),
+            )
 
             dead_lettered = cursor.rowcount
             conn.commit()

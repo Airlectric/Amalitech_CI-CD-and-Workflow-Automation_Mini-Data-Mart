@@ -1,21 +1,12 @@
-import os
 from datetime import datetime
-from typing import List, Optional
 
-import boto3
-from botocore.exceptions import ClientError
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from botocore.exceptions import ClientError
 
 
 class MinIOHook(S3Hook):
-    def __init__(
-        self,
-        aws_conn_id: str = "minio_default",
-        bucket_name: str = "bronze",
-        *args,
-        **kwargs
-    ):
-        super().__init__(aws_conn_id=aws_conn_id, *args, **kwargs)
+    def __init__(self, aws_conn_id: str = "minio_default", bucket_name: str = "bronze", **kwargs):
+        super().__init__(aws_conn_id=aws_conn_id, **kwargs)
         self.bucket_name = bucket_name
         self._ensure_bucket_exists()
 
@@ -26,12 +17,7 @@ class MinIOHook(S3Hook):
         except ClientError:
             self.get_conn().create_bucket(Bucket=self.bucket_name)
 
-    def list_files(
-        self,
-        prefix: str = "",
-        suffix: Optional[str] = None,
-        ingest_date: Optional[datetime] = None
-    ) -> List[str]:
+    def list_files(self, prefix: str = "", suffix: str | None = None, ingest_date: datetime | None = None) -> list[str]:
         if ingest_date:
             date_prefix = f"{prefix}ingest_date={ingest_date.strftime('%Y-%m-%d')}/"
         else:
@@ -50,13 +36,10 @@ class MinIOHook(S3Hook):
 
         return files
 
-    def read_parquet(
-        self,
-        key: str,
-        engine: str = "pyarrow"
-    ):
-        import pandas as pd
+    def read_parquet(self, key: str, engine: str = "pyarrow"):
         from io import BytesIO
+
+        import pandas as pd
 
         s3_client = self.get_conn()
         response = s3_client.get_object(Bucket=self.bucket_name, Key=key)
@@ -71,30 +54,20 @@ class MinIOHook(S3Hook):
             "size": response.get("ContentLength"),
             "last_modified": response.get("LastModified"),
             "etag": response.get("ETag"),
-            "metadata": response.get("Metadata", {})
+            "metadata": response.get("Metadata", {}),
         }
 
-    def upload_file(
-        self,
-        local_file: str,
-        key: str,
-        metadata: Optional[dict] = None
-    ):
+    def upload_file(self, local_file: str, key: str, metadata: dict | None = None):
         extra_args = {}
         if metadata:
             extra_args["Metadata"] = metadata
 
-        self.get_conn().upload_file(
-            local_file,
-            self.bucket_name,
-            key,
-            ExtraArgs=extra_args
-        )
+        self.get_conn().upload_file(local_file, self.bucket_name, key, ExtraArgs=extra_args)
 
     def delete_file(self, key: str):
         self.get_conn().delete_object(Bucket=self.bucket_name, Key=key)
 
-    def get_ingest_dates(self, prefix: str = "") -> List[datetime]:
+    def get_ingest_dates(self, prefix: str = "") -> list[datetime]:
         files = self.list_files(prefix=prefix)
         dates = set()
 

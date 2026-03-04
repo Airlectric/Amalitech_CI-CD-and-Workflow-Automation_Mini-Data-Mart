@@ -268,26 +268,50 @@ flowchart LR
 ## CI/CD Pipeline
 
 ```mermaid
-flowchart LR
-    Push["Push / PR to master"] --> Lint["Lint & Type Check<br/>ruff, mypy"]
-    Push --> Unit["Unit Tests<br/>pytest + coverage"]
-    Push --> Security["Security Scan<br/>bandit, pip-audit"]
-    Lint & Unit & Security --> Build["Build & Push<br/>Docker → GHCR"]
+flowchart TD
+    Trigger["Push / PR to master<br/>or manual dispatch"]
 
-    style Lint fill:#3498DB,color:#fff
-    style Unit fill:#3498DB,color:#fff
-    style Security fill:#3498DB,color:#fff
-    style Build fill:#27AE60,color:#fff
+    Trigger --> Lint
+    Trigger --> Tests
+    Trigger --> Security
+
+    subgraph Parallel["Parallel Jobs"]
+        Lint["Lint & Type Check<br/>ruff check · ruff format · mypy"]
+        Tests["Unit Tests<br/>pytest · pytest-cov"]
+        Security["Security Scan<br/>bandit · pip-audit"]
+    end
+
+    Lint --> Gate{All passed?}
+    Tests --> Gate
+    Security --> Gate
+
+    Gate -->|Yes + push to master| Build["Build & Push<br/>Docker image → GHCR"]
+    Gate -->|PR or failure| Stop["Done"]
+
+    style Lint fill:#2563eb,color:#fff
+    style Tests fill:#16a34a,color:#fff
+    style Security fill:#dc2626,color:#fff
+    style Build fill:#7c3aed,color:#fff
 ```
 
 ### CI/CD Jobs
 
-| Job | Tools | Description |
+| Job | Tools | What It Does |
 |-----|-------|-------------|
-| Lint & Type Check | ruff check, ruff format, mypy | Linting, formatting, type checking |
-| Unit Tests | pytest, pytest-cov | DAG imports, generator, remediation logic |
-| Security Scan | bandit, pip-audit | Code vulnerability + dependency audit |
-| Build & Push | Docker Buildx | Build image, push to GHCR (master only) |
+| **Lint & Type Check** | `ruff check`, `ruff format --check`, `mypy` | Code style, import ordering, formatting, static types |
+| **Unit Tests** | `pytest`, `pytest-cov` | 51 tests: DAG structure, data generator, remediation logic |
+| **Security Scan** | `bandit`, `pip-audit` | Source code vulnerabilities + dependency CVEs |
+| **Build & Push** | Docker Buildx | Build Airflow image, push to GHCR (master only) |
+
+### Pre-commit Hooks
+
+The `.pre-commit-config.yaml` runs the same checks locally before each commit:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
+Hooks: ruff (lint + format), bandit (security), mypy (types).
 
 ### Schema Reference
 

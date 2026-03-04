@@ -2,13 +2,12 @@
 Data Generator DAG
 Generates different data quality scenarios to test the pipeline
 """
+
 from datetime import datetime, timedelta
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-
-from utils.minio_hook import MinIOHook
 from data_generator.generator import generate_sales_data
-
 
 BRONZE_BUCKET = "bronze"
 
@@ -26,50 +25,47 @@ def upload_to_minio(df, mode: str):
     """Upload generated dataframe to MinIO using environment variables"""
     import os
     import uuid
-    import boto3
     from io import BytesIO
-    
+
+    import boto3
+
     ingest_date = datetime.now().strftime("%Y-%m-%d")
     unique_id = str(uuid.uuid4())[:8]
     filename = f"sales_{mode}_{unique_id}.parquet"
     key = f"sales/ingest_date={ingest_date}/{filename}"
-    
+
     buffer = BytesIO()
     df.to_parquet(buffer, engine="pyarrow", compression="snappy", index=False)
     buffer.seek(0)
-    
+
     # Get MinIO config from environment variables
     minio_endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
     minio_access_key = os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("MINIO_ROOT_USER", "minio")
     minio_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY") or os.getenv("MINIO_ROOT_PASSWORD", "minio123")
-    
+
     s3_client = boto3.client(
-        's3',
+        "s3",
         endpoint_url=f"http://{minio_endpoint}",
         aws_access_key_id=minio_access_key,
         aws_secret_access_key=minio_secret_key,
     )
-    
-    s3_client.put_object(
-        Bucket=BRONZE_BUCKET,
-        Key=key,
-        Body=buffer.getvalue(),
-        ContentType="application/parquet"
-    )
-    
+
+    s3_client.put_object(Bucket=BRONZE_BUCKET, Key=key, Body=buffer.getvalue(), ContentType="application/parquet")
+
     return {"rows": len(df), "file_path": key, "mode": mode}
 
 
 def generate_and_upload(mode: str, num_rows: int = 1000, **kwargs):
     """Generate data and upload to MinIO"""
     import logging
+
     logger = logging.getLogger(__name__)
-    
+
     logger.info(f"Generating data with mode={mode}, rows={num_rows}")
     df = generate_sales_data(num_rows=num_rows, mode=mode)
     result = upload_to_minio(df, mode)
     logger.info(f"Uploaded to MinIO: {result['file_path']}")
-    
+
     return result
 
 
@@ -90,12 +86,7 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["etl", "data-generation", "bronze"],
-    description="Generate sample data and upload to MinIO Bronze layer"
+    description="Generate sample data and upload to MinIO Bronze layer",
 ) as dag:
-
     for task_id, mode, rows in MODES:
-        PythonOperator(
-            task_id=task_id,
-            python_callable=generate_and_upload,
-            op_kwargs={"mode": mode, "num_rows": rows}
-        )
+        PythonOperator(task_id=task_id, python_callable=generate_and_upload, op_kwargs={"mode": mode, "num_rows": rows})

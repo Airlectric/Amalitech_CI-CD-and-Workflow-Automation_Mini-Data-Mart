@@ -1,5 +1,6 @@
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 
 class TestDataQualityDAG:
@@ -9,6 +10,7 @@ class TestDataQualityDAG:
         """Test that data_quality.py can be imported"""
         try:
             import data_quality
+
             assert data_quality is not None
         except ImportError as e:
             pytest.skip(f"Cannot import data_quality: {e}")
@@ -16,16 +18,19 @@ class TestDataQualityDAG:
     def test_dag_has_correct_id(self):
         """Test DAG has correct ID"""
         from data_quality import dag
+
         assert dag.dag_id == "data_quality_checks"
 
     def test_dag_has_schedule(self):
         """Test DAG has schedule"""
         from data_quality import dag
+
         assert dag.schedule is not None
 
     def test_dag_has_tasks(self):
         """Test DAG has all required tasks"""
         from data_quality import dag
+
         task_ids = [task.task_id for task in dag.tasks]
 
         assert "validate_quarantine_patterns" in task_ids
@@ -62,6 +67,7 @@ class TestIngestBronzeToSilverDAG:
         """Test that ingest_bronze_to_silver.py can be imported"""
         try:
             import ingest_bronze_to_silver
+
             assert ingest_bronze_to_silver is not None
         except ImportError as e:
             pytest.skip(f"Cannot import ingest_bronze_to_silver: {e}")
@@ -69,11 +75,13 @@ class TestIngestBronzeToSilverDAG:
     def test_dag_has_correct_id(self):
         """Test DAG has correct ID"""
         from ingest_bronze_to_silver import dag
+
         assert dag.dag_id == "ingest_bronze_to_silver"
 
     def test_dag_has_tasks(self):
         """Test DAG has required tasks"""
         from ingest_bronze_to_silver import dag
+
         task_ids = [task.task_id for task in dag.tasks]
 
         assert "discover_and_ingest" in task_ids
@@ -87,6 +95,7 @@ class TestGenerateSampleDataDAG:
         """Test that generate_sample_data.py can be imported"""
         try:
             import generate_sample_data
+
             assert generate_sample_data is not None
         except ImportError as e:
             pytest.skip(f"Cannot import generate_sample_data: {e}")
@@ -94,6 +103,7 @@ class TestGenerateSampleDataDAG:
     def test_dag_has_correct_id(self):
         """Test DAG has correct ID"""
         from generate_sample_data import dag
+
         assert dag.dag_id == "generate_sample_data"
 
 
@@ -104,6 +114,7 @@ class TestRemediationDAG:
         """Test that remediation.py can be imported"""
         try:
             import remediation
+
             assert remediation is not None
         except ImportError as e:
             pytest.skip(f"Cannot import remediation: {e}")
@@ -111,6 +122,7 @@ class TestRemediationDAG:
     def test_dag_has_correct_id(self):
         """Test DAG has correct ID"""
         from remediation import dag
+
         assert dag.dag_id == "remediation_workflow"
 
 
@@ -121,6 +133,7 @@ class TestSilverToGoldDAG:
         """Test that silver_to_gold.py can be imported"""
         try:
             import silver_to_gold
+
             assert silver_to_gold is not None
         except ImportError as e:
             pytest.skip(f"Cannot import silver_to_gold: {e}")
@@ -128,6 +141,7 @@ class TestSilverToGoldDAG:
     def test_dag_has_correct_id(self):
         """Test DAG has correct ID"""
         from silver_to_gold import dag
+
         assert dag.dag_id == "silver_to_gold"
 
 
@@ -155,48 +169,39 @@ class TestDAGStructure:
 class TestDAGTaskLogic:
     """Test task logic in DAGs"""
 
-    @patch('utils.postgres_hook.PostgresLayerHook')
+    @patch("utils.postgres_hook.PostgresLayerHook")
     def test_validate_quarantine_patterns_logic(self, mock_hook):
         """Test validate_quarantine_patterns task logic"""
         from data_quality import validate_quarantine_patterns
 
         mock_instance = Mock()
-        mock_instance.execute_query.return_value = [
-            [],
-            [[10, 0, 0, 0]]
-        ]
+        mock_instance.execute_query.return_value = [[], [[10, 0, 0, 0]]]
         mock_hook.return_value = mock_instance
 
         result = validate_quarantine_patterns()
 
         assert result is not None
 
-    @patch('utils.postgres_hook.PostgresLayerHook')
+    @patch("utils.postgres_hook.PostgresLayerHook")
     def test_profile_silver_logic(self, mock_hook):
         """Test profile_silver task logic"""
         from data_quality import profile_silver
 
         mock_instance = Mock()
-        mock_instance.execute_query.return_value = [
-            [],
-            [[100]]
-        ]
+        mock_instance.execute_query.return_value = [[], [[100]]]
         mock_hook.return_value = mock_instance
 
         result = profile_silver()
 
         assert result is not None
 
-    @patch('utils.postgres_hook.PostgresLayerHook')
+    @patch("utils.postgres_hook.PostgresLayerHook")
     def test_detect_drift_logic(self, mock_hook):
         """Test detect_drift task logic"""
         from data_quality import detect_drift
 
         mock_instance = Mock()
-        mock_instance.execute_query.return_value = [
-            [],
-            [[100]]
-        ]
+        mock_instance.execute_query.return_value = [[], [[100]]]
         mock_hook.return_value = mock_instance
 
         profiling_results = {"sales": {"row_count": 100}}

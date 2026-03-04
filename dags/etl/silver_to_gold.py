@@ -3,10 +3,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
-from airflow.operators.empty import EmptyOperator
-
 from utils.postgres_hook import PostgresLayerHook
-
 
 SILVER_SCHEMA = "silver"
 GOLD_SCHEMA = "gold"
@@ -32,13 +29,14 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     tags=["etl", "silver", "gold", "star-schema", "aggregation"],
-    description="Build star schema: Silver dimensions → Gold facts. Triggered by data_quality_checks."
+    description="Build star schema: Silver dimensions → Gold facts. Triggered by data_quality_checks.",
 ) as dag:
 
     @task
     def populate_silver_customers():
         """Populate silver.customers dimension from sales (Star Schema)"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
@@ -48,14 +46,14 @@ with DAG(
                 total_revenue, average_order_value, customer_segment,
                 last_purchase_date, days_since_last_purchase
             )
-            SELECT 
+            SELECT
                 customer_id,
                 MAX(customer_name) as customer_name,
                 MIN(sale_date) as first_purchase_date,
                 COUNT(*) as total_purchases,
                 SUM(net_amount) as total_revenue,
                 AVG(net_amount) as average_order_value,
-                CASE 
+                CASE
                     WHEN SUM(net_amount) > 10000 THEN 'Platinum'
                     WHEN SUM(net_amount) > 5000 THEN 'Gold'
                     WHEN SUM(net_amount) > 1000 THEN 'Silver'
@@ -88,6 +86,7 @@ with DAG(
     def populate_silver_products():
         """Populate silver.products dimension from sales (Star Schema)"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
@@ -97,7 +96,7 @@ with DAG(
                 min_unit_price, max_unit_price, avg_unit_price,
                 total_quantity_sold, total_revenue
             )
-            SELECT 
+            SELECT
                 product_id,
                 MAX(product_name) as product_name,
                 MAX(category) as category,
@@ -132,12 +131,13 @@ with DAG(
     def aggregate_daily_sales():
         """Gold fact table: daily sales aggregates"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
         query = """
             INSERT INTO gold.daily_sales (sale_date, total_transactions, total_quantity_sold, gross_revenue, total_discounts, net_revenue, average_order_value, unique_customers, unique_products, top_category)
-            SELECT 
+            SELECT
                 sale_date as sale_date,
                 COUNT(*) as total_transactions,
                 SUM(quantity) as total_quantity_sold,
@@ -147,8 +147,8 @@ with DAG(
                 AVG(net_amount) as average_order_value,
                 COUNT(DISTINCT customer_id) as unique_customers,
                 COUNT(DISTINCT product_id) as unique_products,
-                (SELECT category FROM silver.sales s2 
-                 WHERE s2.sale_date = silver.sales.sale_date 
+                (SELECT category FROM silver.sales s2
+                 WHERE s2.sale_date = silver.sales.sale_date
                  GROUP BY category ORDER BY SUM(s2.net_amount) DESC LIMIT 1) as top_category
             FROM silver.sales
             GROUP BY sale_date
@@ -175,16 +175,17 @@ with DAG(
     def aggregate_product_performance():
         """Gold fact table: product performance"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
         query = """
             INSERT INTO gold.product_performance (
-                product_id, product_name, category, 
+                product_id, product_name, category,
                 total_quantity_sold, total_revenue, average_unit_price,
                 total_discount_given, number_of_transactions, average_quantity_per_transaction
             )
-            SELECT 
+            SELECT
                 s.product_id,
                 MAX(s.product_name) as product_name,
                 MAX(s.category) as category,
@@ -218,6 +219,7 @@ with DAG(
     def aggregate_store_performance():
         """Gold fact table: store performance"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
@@ -227,15 +229,15 @@ with DAG(
                 total_transactions, total_revenue, average_order_value,
                 total_customers_served, top_selling_category
             )
-            SELECT 
+            SELECT
                 s.store_location,
                 MAX(s.region) as region,
                 COUNT(*) as total_transactions,
                 SUM(s.net_amount) as total_revenue,
                 AVG(s.net_amount) as average_order_value,
                 COUNT(DISTINCT s.customer_id) as total_customers_served,
-                (SELECT category FROM silver.sales s2 
-                 WHERE s2.store_location = s.store_location 
+                (SELECT category FROM silver.sales s2
+                 WHERE s2.store_location = s.store_location
                  GROUP BY category ORDER BY SUM(s2.net_amount) DESC LIMIT 1) as top_selling_category
             FROM silver.sales s
             GROUP BY s.store_location
@@ -259,31 +261,32 @@ with DAG(
     def aggregate_customer_analytics():
         """Gold fact table: customer analytics"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
         query = """
             INSERT INTO gold.customer_analytics (
-                customer_id, customer_name, total_purchases, total_revenue, 
+                customer_id, customer_name, total_purchases, total_revenue,
                 average_order_value, favorite_category, favorite_payment_method,
                 most_visited_store, customer_tier
             )
-            SELECT 
+            SELECT
                 s.customer_id,
                 MAX(s.customer_name) as customer_name,
                 COUNT(*) as total_purchases,
                 SUM(s.net_amount) as total_revenue,
                 AVG(s.net_amount) as average_order_value,
-                (SELECT category FROM silver.sales s2 
-                 WHERE s2.customer_id = s.customer_id 
+                (SELECT category FROM silver.sales s2
+                 WHERE s2.customer_id = s.customer_id
                  GROUP BY category ORDER BY COUNT(*) DESC LIMIT 1) as favorite_category,
-                (SELECT payment_method FROM silver.sales s2 
-                 WHERE s2.customer_id = s.customer_id 
+                (SELECT payment_method FROM silver.sales s2
+                 WHERE s2.customer_id = s.customer_id
                  GROUP BY payment_method ORDER BY COUNT(*) DESC LIMIT 1) as favorite_payment_method,
-                (SELECT store_location FROM silver.sales s2 
-                 WHERE s2.customer_id = s.customer_id 
+                (SELECT store_location FROM silver.sales s2
+                 WHERE s2.customer_id = s.customer_id
                  GROUP BY store_location ORDER BY COUNT(*) DESC LIMIT 1) as most_visited_store,
-                CASE 
+                CASE
                     WHEN SUM(s.net_amount) > 10000 THEN 'Platinum'
                     WHEN SUM(s.net_amount) > 5000 THEN 'Gold'
                     WHEN SUM(s.net_amount) > 1000 THEN 'Silver'
@@ -314,6 +317,7 @@ with DAG(
     def aggregate_category_insights():
         """Gold fact table: category insights"""
         import logging
+
         logger = logging.getLogger(__name__)
         pg_hook = PostgresLayerHook()
 
@@ -322,7 +326,7 @@ with DAG(
                 category, total_products_sold, total_revenue,
                 average_discount_percentage, number_of_transactions, average_order_value
             )
-            SELECT 
+            SELECT
                 category,
                 SUM(quantity) as total_products_sold,
                 SUM(net_amount) as total_revenue,
@@ -350,7 +354,7 @@ with DAG(
     # Quality gate must pass before any ETL tasks run
     customers = populate_silver_customers()
     products = populate_silver_products()
-    
+
     # Gold aggregations depend on silver dimensions
     daily_sales = aggregate_daily_sales()
     product_perf = aggregate_product_performance()

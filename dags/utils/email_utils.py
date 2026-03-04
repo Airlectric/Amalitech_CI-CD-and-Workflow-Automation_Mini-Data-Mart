@@ -3,19 +3,20 @@ Central Email Utility for Airflow DAGs
 Provides a reusable function to send email alerts via Gmail SMTP
 With retry mechanism, alert severity levels, and distribution list support
 """
+
+import logging
 import os
 import smtplib
-import logging
 import time
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from enum import Enum
 from functools import wraps
-
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
 
 # Alert severity levels
 class AlertSeverity(Enum):
@@ -25,12 +26,12 @@ class AlertSeverity(Enum):
 
 
 # Throttling configuration (use Redis in production for multi-worker)
-_alert_cache: Dict[str, datetime] = {}
+_alert_cache: dict[str, datetime] = {}
 
 THROTTLE_INTERVALS = {
     AlertSeverity.CRITICAL: None,  # No throttle
-    AlertSeverity.WARNING: 3600,    # 1 hour
-    AlertSeverity.INFO: 21600,     # 6 hours
+    AlertSeverity.WARNING: 3600,  # 1 hour
+    AlertSeverity.INFO: 21600,  # 6 hours
 }
 
 # Retry configuration
@@ -39,7 +40,7 @@ RETRY_BASE_DELAY = 2
 RETRY_MAX_DELAY = 60
 
 
-def get_smtp_config() -> Dict[str, Any]:
+def get_smtp_config() -> dict[str, Any]:
     """Get SMTP config from environment variables - no hardcoded defaults"""
     smtp_user = os.getenv("AIRFLOW__SMTP__SMTP_USER")
     smtp_password = os.getenv("AIRFLOW__SMTP__SMTP_PASSWORD")
@@ -60,6 +61,7 @@ def get_smtp_config() -> Dict[str, Any]:
 
 def retry_with_backoff(max_retries: int = MAX_RETRIES, base_delay: int = RETRY_BASE_DELAY):
     """Decorator for retry with exponential backoff"""
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -70,13 +72,15 @@ def retry_with_backoff(max_retries: int = MAX_RETRIES, base_delay: int = RETRY_B
                 except Exception as e:
                     last_exception = e
                     if attempt < max_retries - 1:
-                        delay = min(base_delay * (2 ** attempt), RETRY_MAX_DELAY)
+                        delay = min(base_delay * (2**attempt), RETRY_MAX_DELAY)
                         logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
                         time.sleep(delay)
 
             logger.error(f"All {max_retries} attempts failed: {last_exception}")
             return {"status": "failed", "error": str(last_exception), "attempts": max_retries}
+
         return wrapper
+
     return decorator
 
 
@@ -98,11 +102,11 @@ def send_alert_email(
     subject: str,
     html_body: str,
     recipient: str,
-    sender: Optional[str] = None,
-    password: Optional[str] = None,
-    smtp_host: Optional[str] = None,
-    smtp_port: Optional[int] = None
-) -> Dict[str, Any]:
+    sender: str | None = None,
+    password: str | None = None,
+    smtp_host: str | None = None,
+    smtp_port: int | None = None,
+) -> dict[str, Any]:
     """
     Send an HTML email alert with retry mechanism
 
@@ -127,12 +131,12 @@ def send_alert_email(
         smtp_port = smtp_port or config["port"]
 
     try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = sender
-        msg['To'] = recipient
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = recipient
 
-        part = MIMEText(html_body, 'html')
+        part = MIMEText(html_body, "html")
         msg.attach(part)
 
         with smtplib.SMTP(smtp_host, smtp_port) as server:
@@ -149,12 +153,7 @@ def send_alert_email(
 
 
 @retry_with_backoff(max_retries=3, base_delay=2)
-def send_alert_email_with_retry(
-    subject: str,
-    html_body: str,
-    recipient: str,
-    **kwargs
-) -> Dict[str, Any]:
+def send_alert_email_with_retry(subject: str, html_body: str, recipient: str, **kwargs) -> dict[str, Any]:
     """Send email with automatic retry"""
     return send_alert_email(subject, html_body, recipient, **kwargs)
 
@@ -164,8 +163,8 @@ def send_throttled_alert(
     html_body: str,
     recipient: str,
     severity: AlertSeverity = AlertSeverity.WARNING,
-    alert_type: str = "generic"
-) -> Dict[str, Any]:
+    alert_type: str = "generic",
+) -> dict[str, Any]:
     """Send alert with severity-based throttling"""
     alert_key = f"{alert_type}:{recipient}:{subject[:50]}"
 
@@ -192,10 +191,10 @@ def send_throttled_alert(
 def send_alert_to_team(
     subject: str,
     html_body: str,
-    recipients: List[str],
+    recipients: list[str],
     severity: AlertSeverity = AlertSeverity.WARNING,
-    alert_type: str = "default"
-) -> Dict[str, Any]:
+    alert_type: str = "default",
+) -> dict[str, Any]:
     """Send alert to multiple recipients"""
     if not recipients:
         logger.warning("No alert recipients provided")
@@ -215,10 +214,10 @@ def send_ingestion_alert(
     total_read: int,
     silver_count: int,
     quarantine_count: int,
-    files_scanned: List[str],
-    errors: List[str],
+    files_scanned: list[str],
+    errors: list[str],
     recipient: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Send ingestion pipeline alert email"""
     quarantine_rate = (quarantine_count / total_read * 100) if total_read > 0 else 0
 
@@ -265,24 +264,34 @@ def send_ingestion_alert(
 
     subject = f"{subject_prefix} Ingestion Alert - {run_id[:8]}"
 
-    files_html = "".join([f"<li><code>{f}</code></li>" for f in files_scanned[:10]]) if files_scanned else "<li>No files to process</li>"
+    files_html = (
+        "".join([f"<li><code>{f}</code></li>" for f in files_scanned[:10]])
+        if files_scanned
+        else "<li>No files to process</li>"
+    )
 
     # Separate schema drift errors from other errors
     schema_drift_html = ""
     if schema_drift_errors:
-        schema_drift_html = """
+        schema_drift_html = (
+            """
         <h3 style="color: #8B0000; background: #ffe6e6; padding: 10px; border-radius: 5px;">
             SCHEMA DRIFT ERRORS (Files Skipped)
         </h3>
         <ul style="background: #ffe6e6; padding: 15px; border-radius: 5px; color: #8B0000;">
-        """ + "".join([f"<li><code>{e}</code></li>" for e in schema_drift_errors]) + """
+        """
+            + "".join([f"<li><code>{e}</code></li>" for e in schema_drift_errors])
+            + """
         </ul>
         <p style="color: #8B0000;">
             <strong>Action Required:</strong> Update the data source schema or DATASET_SPECS in ingest_bronze_to_silver.py to process these files.
         </p>
         """
+        )
 
-    other_errors_html = "".join([f"<li><code>{e}</code></li>" for e in other_errors[:5]]) if other_errors else "<li>No errors</li>"
+    other_errors_html = (
+        "".join([f"<li><code>{e}</code></li>" for e in other_errors[:5]]) if other_errors else "<li>No errors</li>"
+    )
 
     errors_html = other_errors_html
 
@@ -310,7 +319,7 @@ def send_ingestion_alert(
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Rows to Quarantine</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; color: {'red' if quarantine_count > 0 else 'green'};">{quarantine_count:,}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; color: {"red" if quarantine_count > 0 else "green"};">{quarantine_count:,}</td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Quarantine Rate</td>
@@ -339,27 +348,23 @@ def send_ingestion_alert(
     """
 
     # Replace placeholder in html_body
-    html_body = html_body.format(
-        schema_drift_html=schema_drift_html,
-        files_html=files_html,
-        errors_html=errors_html
-    )
+    html_body = html_body.format(schema_drift_html=schema_drift_html, files_html=files_html, errors_html=errors_html)
 
     return send_throttled_alert(subject, html_body, recipient, severity, "ingestion")
 
 
 def send_data_quality_alert(
-    quarantine_stats: Dict[str, Any],
-    profiling_results: Dict[str, Any],
-    drift_results: Dict[str, Any],
+    quarantine_stats: dict[str, Any],
+    profiling_results: dict[str, Any],
+    drift_results: dict[str, Any],
     recipient: str,
-    attachment_path: Optional[str] = None
-) -> Dict[str, Any]:
+    attachment_path: str | None = None,
+) -> dict[str, Any]:
     """Send data quality alert email"""
     has_issues = (
-        quarantine_stats.get("pending", 0) > 0 or
-        any(r.get("drift_detected", False) for r in drift_results.values()) or
-        any(not r.get("success", True) for r in profiling_results.values())
+        quarantine_stats.get("pending", 0) > 0
+        or any(r.get("drift_detected", False) for r in drift_results.values())
+        or any(not r.get("success", True) for r in profiling_results.values())
     )
 
     subject_prefix = "[CRITICAL] ALERT" if has_issues else "[INFO] OK"
@@ -374,7 +379,7 @@ def send_data_quality_alert(
     <html>
     <body style="font-family: Arial, sans-serif; margin: 20px;">
         <h1>Data Quality Report</h1>
-        <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
 
         <h2 style="color: #2c3e50;">Quarantine Status</h2>
         <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
@@ -386,11 +391,11 @@ def send_data_quality_alert(
                 <th style="padding: 10px; border: 1px solid #bdc3c7;">Dead Letter</th>
             </tr>
             <tr>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats.get('total_quarantined', 0)}</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if pending > 0 else '#d5f5e3'};">{pending}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats.get("total_quarantined", 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {"#fadbd8" if pending > 0 else "#d5f5e3"};">{pending}</td>
                 <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{remediated}</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats.get('rejected', 0)}</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if q_stats.get('dead_letter', 0) > 0 else '#d5f5e3'};">{q_stats.get('dead_letter', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats.get("rejected", 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {"#fadbd8" if q_stats.get("dead_letter", 0) > 0 else "#d5f5e3"};">{q_stats.get("dead_letter", 0)}</td>
             </tr>
         </table>
 
@@ -447,14 +452,14 @@ def send_data_quality_alert(
     # Add attachment if provided
     kwargs = {}
     if attachment_path and os.path.exists(attachment_path):
-        from email.mime.base import MIMEBase
         from email import encoders
+        from email.mime.base import MIMEBase
 
-        with open(attachment_path, 'rb') as f:
-            attachment = MIMEBase('application', 'octet-stream')
+        with open(attachment_path, "rb") as f:
+            attachment = MIMEBase("application", "octet-stream")
             attachment.set_payload(f.read())
         encoders.encode_base64(attachment)
-        attachment.add_header('Content-Disposition', f'attachment; filename={os.path.basename(attachment_path)}')
+        attachment.add_header("Content-Disposition", f"attachment; filename={os.path.basename(attachment_path)}")
         # Note: Need to modify send_alert_email to support attachments
         kwargs["attachment_path"] = attachment_path
 
@@ -466,9 +471,9 @@ def send_remediation_alert(
     failed_count: int,
     total_valid: int,
     total_invalid: int,
-    stats: Dict[str, Any],
+    stats: dict[str, Any],
     recipient: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Send remediation workflow alert email"""
     has_failures = failed_count > 0 or total_invalid > 0
 
@@ -480,7 +485,7 @@ def send_remediation_alert(
     <html>
     <body style="font-family: Arial, sans-serif; margin: 20px;">
         <h1>Remediation Workflow Report</h1>
-        <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
 
         <h2 style="color: #2c3e50;">Remediation Summary</h2>
         <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
@@ -498,11 +503,11 @@ def send_remediation_alert(
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Failed to Fix</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if failed_count > 0 else '#d5f5e3'};">{failed_count}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {"#fadbd8" if failed_count > 0 else "#d5f5e3"};">{failed_count}</td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Invalid (Auto-Rejected)</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if total_invalid > 0 else '#d5f5e3'};">{total_invalid}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {"#fadbd8" if total_invalid > 0 else "#d5f5e3"};">{total_invalid}</td>
             </tr>
         </table>
 
@@ -514,23 +519,23 @@ def send_remediation_alert(
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Total Records</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get('total', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get("total", 0)}</td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Pending</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get('pending', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get("pending", 0)}</td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Total Processed</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get('processed', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get("processed", 0)}</td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Remediated</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get('remediated', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get("remediated", 0)}</td>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7;">Rejected</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get('rejected', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{stats.get("rejected", 0)}</td>
             </tr>
         </table>
 

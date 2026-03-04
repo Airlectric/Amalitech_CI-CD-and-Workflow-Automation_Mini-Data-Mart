@@ -558,21 +558,57 @@ erDiagram
 ## CI/CD Pipeline
 
 ```mermaid
-flowchart LR
-    Push["Push / PR to master"] --> Lint["Lint & Type Check<br/>ruff, mypy"]
-    Push --> Unit["Unit Tests<br/>pytest + coverage"]
-    Push --> Security["Security Scan<br/>bandit, pip-audit"]
-    Lint & Unit & Security --> Build["Build & Push<br/>Docker → GHCR"]
+flowchart TD
+    Trigger["Push / PR to master<br/>or manual dispatch"]
+
+    Trigger --> Lint
+    Trigger --> Tests
+    Trigger --> Security
+
+    subgraph Parallel["Parallel Jobs"]
+        Lint["Lint & Type Check<br/>ruff check · ruff format · mypy"]
+        Tests["Unit Tests<br/>pytest · pytest-cov"]
+        Security["Security Scan<br/>bandit · pip-audit"]
+    end
+
+    Lint --> Gate{All passed?}
+    Tests --> Gate
+    Security --> Gate
+
+    Gate -->|Yes + push to master| Build["Build & Push<br/>Docker image → GHCR"]
+    Gate -->|PR or failure| Stop["Done"]
+
+    style Lint fill:#2563eb,color:#fff
+    style Tests fill:#16a34a,color:#fff
+    style Security fill:#dc2626,color:#fff
+    style Build fill:#7c3aed,color:#fff
 ```
 
-| Job | Tools | Description |
+| Job | Tools | What It Does |
 |-----|-------|-------------|
-| Lint & Type Check | ruff check, ruff format, mypy | Linting, formatting, type checking |
-| Unit Tests | pytest, pytest-cov | DAG imports, generator, task logic |
-| Security Scan | bandit, pip-audit | Code vulnerability + dependency audit |
-| Build & Push | Docker Buildx | Build image, push to GHCR (master only) |
+| **Lint & Type Check** | `ruff check`, `ruff format --check`, `mypy` | Enforces code style (PEP 8), import ordering, formatting consistency, and static type analysis |
+| **Unit Tests** | `pytest`, `pytest-cov` | Runs 51 unit tests covering DAG structure, data generator modes, remediation logic, and task functions |
+| **Security Scan** | `bandit`, `pip-audit` | Scans source code for common vulnerabilities (SQL injection, hardcoded secrets) and checks dependencies for known CVEs |
+| **Build & Push** | Docker Buildx | Builds the Airflow image and pushes to GitHub Container Registry (only on push to `master`, not on PRs) |
 
-Workflow features: `workflow_dispatch` for manual triggers, concurrency groups to cancel stale runs, pip caching, JUnit XML test output.
+**Workflow features:** `workflow_dispatch` for manual triggers, concurrency groups to cancel stale runs, pip caching, JUnit XML test output.
+
+### Pre-commit Hooks
+
+Pre-commit hooks run the same checks locally before each commit, catching issues before they reach CI.
+
+```bash
+# Install pre-commit
+pip install pre-commit
+
+# Set up hooks (one-time)
+pre-commit install
+
+# Run manually against all files
+pre-commit run --all-files
+```
+
+The `.pre-commit-config.yaml` includes: ruff (lint + format), bandit (security), and mypy (types).
 
 ---
 
@@ -596,22 +632,122 @@ Seven pre-configured dashboards connect to the Gold layer:
 
 ## Testing
 
+### Test Architecture
+
+Tests are organized into three categories using pytest markers:
+
+| Marker | Category | Requires Docker? | What It Covers |
+|--------|----------|:-:|----------------|
+| *(none)* | Unit tests | No | Pure logic tests — no database, no network, all dependencies mocked |
+| `@pytest.mark.integration` | Integration tests | Yes | Live database queries, container health checks, schema validation |
+| `@pytest.mark.slow` | End-to-end tests | Yes | Full pipeline flows across multiple services |
+
+### Test Suites
+
+#### `tests/test_dags.py` — DAG Structure & Task Logic (18 tests)
+
+Validates that all five Airflow DAGs load correctly and have the expected configuration:
+
+- **Import tests**: Each DAG file (`data_quality`, `ingest_bronze_to_silver`, `generate_sample_data`, `remediation`, `silver_to_gold`) can be imported without errors
+- **DAG ID tests**: Verifies each DAG has the correct `dag_id`
+- **Task tests**: Checks that `data_quality_checks` DAG contains all 8 expected tasks (`validate_quarantine_patterns`, `profile_silver`, `detect_drift`, `check_completeness`, `check_freshness`, `check_referential_integrity`, `generate_data_docs`, `send_alerts`)
+- **Config tests**: Validates `default_args` (owner, retries, email_on_failure), schedule intervals, start dates, and tags
+- **Task logic tests**: Mocks `PostgresLayerHook` and runs `validate_quarantine_patterns`, `profile_silver`, and `detect_drift` functions to verify return values
+
+#### `tests/test_data_generator.py` — Data Generator (12 tests)
+
+Tests the synthetic data generator (`scripts/data_generator/generator.py`) that produces Parquet files for the Bronze layer:
+
+- **Mode tests**: Validates each generation mode produces correct output:
+  - `clean` — No nulls in required fields, positive quantity and price
+  - `dirty` — Contains deliberate null values for quarantine testing
+  - `duplicates` — Produces duplicate `transaction_id` values
+  - `mixed` — Combination of clean and dirty rows
+  - `edge_cases` — Boundary values and special characters
+  - `schema_invalid` — Columns that don't match the expected schema
+- **Edge cases**: Zero rows (empty DataFrame), single row, large dataset (10,000 rows)
+- **Column validation**: Verifies column order matches the expected schema (`transaction_id`, `sale_date`, `sale_hour`, `customer_id`, ...)
+
+#### `tests/test_remediation.py` — Remediation Workflow (14 tests)
+
+Tests the quarantine record remediation pipeline:
+
+- **DAG structure**: Verifies `remediation_workflow` DAG has `schedule=None` (manual trigger only) and contains tasks `remediate_all_batches`, `send_remediation_notification`, `trigger_gold_rebuild`
+- **`_validate_records()`**: Tests record validation logic:
+  - Valid records with all required fields pass validation
+  - Records missing required fields (`sale_date`, `product_id`, etc.) are rejected
+  - Negative quantity or negative price records are rejected
+  - Malformed JSON payloads are caught and rejected
+- **`_batch_replay()`**: Tests the Silver table upsert logic:
+  - Empty input returns zero counts
+  - Successful replay calls `conn.commit()`
+  - Database errors trigger `conn.rollback()` and increment failure count
+- **`_batch_reject()`**: Tests quarantine status updates (marks records as `rejected`)
+- **`_get_quarantine_stats()`**: Tests statistics aggregation (total, pending, remediated, rejected, dead_letter counts)
+- **Integration tests** *(marked `@pytest.mark.integration`)*: Validates `quarantine.sales_failed` table exists and has required columns
+
+#### `tests/test_integration.py` — Infrastructure & Pipeline (15 tests)
+
+End-to-end tests that verify the live Docker environment:
+
+- **PostgreSQL**: Connection, schema existence (`silver`, `quarantine`, `bronze`), table structure validation
+- **MinIO**: Container health check, bucket existence
+- **Airflow**: Container health, DAG loading (active DAGs in database), specific DAG existence
+- **Data quality pipeline**: Quarantine table structure, Silver table columns, replay functionality
+- **End-to-end flow**: Bronze-to-Silver data flow verification, quarantine record lifecycle
+- **Docker Compose**: All required containers running (`postgres`, `airflow`, `redis`, `minio`)
+
+### Running Tests
+
 ```bash
-# Run all tests
+# ─── Unit tests (no Docker required) ───
+# Run all unit tests
+pytest tests/ -m "not integration" -v
+
+# Run a specific test suite
+pytest tests/test_data_generator.py -v
+pytest tests/test_remediation.py -v
+pytest tests/test_dags.py -v
+
+# Run with coverage report
+pytest tests/ -m "not integration" --cov=dags --cov=scripts --cov-report=term-missing
+
+# ─── Integration tests (requires running Docker services) ───
+# Start services first
+docker compose up -d --build
+
+# Run integration tests from the host (connects to localhost:5433)
+pytest tests/ -m integration -v
+
+# Run all tests inside the Airflow container
 docker compose exec airflow-worker pytest tests/ -v
 
-# Run specific suite
-docker compose exec airflow-worker pytest tests/test_remediation.py -v
-
-# Verify data counts
-docker compose exec postgres psql -U airflow -d airflow -c "
-  SELECT 'silver.sales' AS tbl, COUNT(*) FROM silver.sales
-  UNION ALL SELECT 'silver.customers', COUNT(*) FROM silver.customers
-  UNION ALL SELECT 'silver.products', COUNT(*) FROM silver.products
-  UNION ALL SELECT 'quarantine.sales_failed', COUNT(*) FROM quarantine.sales_failed
-  UNION ALL SELECT 'gold.daily_sales', COUNT(*) FROM gold.daily_sales;
-"
+# ─── Linting & security (same checks as CI) ───
+ruff check dags/ scripts/ tests/
+ruff format --check dags/ scripts/ tests/
+bandit -r dags/ scripts/ -c pyproject.toml -ll
 ```
+
+### Test Configuration
+
+Tests are configured in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests requiring Docker",
+    "slow: Slow running tests",
+    "dag: Tests for Airflow DAGs",
+]
+```
+
+The `tests/conftest.py` file handles:
+- **Path resolution**: Adds `dags/`, `dags/etl/`, `scripts/data_generator/` to `sys.path` so test imports work outside the Airflow container
+- **Namespace isolation**: Clears cached `utils` module between test files to prevent `dags/utils` vs `scripts/utils` conflicts
+- **Shared fixtures**: `mock_postgres_connection`, `sample_sales_data`, `sample_quarantine_data`
 
 ---
 

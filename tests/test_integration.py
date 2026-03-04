@@ -1,10 +1,7 @@
-import pytest
 import subprocess
-import time
-import psycopg2
-import os
-from datetime import datetime
 
+import psycopg2
+import pytest
 
 POSTGRES_CONN = {
     "host": "localhost",
@@ -51,9 +48,7 @@ class TestPostgresIntegration:
     def test_postgres_is_running(self, docker_services):
         """Test PostgreSQL container is running"""
         result = subprocess.run(
-            ["docker", "ps", "--filter", "name=postgres", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True
+            ["docker", "ps", "--filter", "name=postgres", "--format", "{{.Names}}"], capture_output=True, text=True
         )
         assert "postgres" in result.stdout
 
@@ -92,8 +87,8 @@ class TestPostgresIntegration:
         """Test silver tables exist"""
         cursor = postgres_conn.cursor()
         cursor.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
+            SELECT table_name
+            FROM information_schema.tables
             WHERE table_schema = 'silver'
         """)
         tables = [row[0] for row in cursor.fetchall()]
@@ -115,9 +110,7 @@ class TestMinIOIntegration:
     def test_minio_is_running(self, docker_services):
         """Test MinIO container is running"""
         result = subprocess.run(
-            ["docker", "ps", "--filter", "name=minio", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True
+            ["docker", "ps", "--filter", "name=minio", "--format", "{{.Names}}"], capture_output=True, text=True
         )
         assert "minio" in result.stdout
 
@@ -126,13 +119,15 @@ class TestMinIOIntegration:
     def test_minio_bucket_exists(self):
         """Test MinIO bucket exists"""
         import boto3
-        s3 = boto3.client('s3',
-            endpoint_url='http://localhost:9000',
-            aws_access_key_id='minioadmin',
-            aws_secret_access_key='minioadmin'
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url="http://localhost:9000",
+            aws_access_key_id="minioadmin",
+            aws_secret_access_key="minioadmin",
         )
         response = s3.list_buckets()
-        buckets = [b['Name'] for b in response['Buckets']]
+        buckets = [b["Name"] for b in response["Buckets"]]
         assert "bronze" in buckets
 
 
@@ -143,9 +138,7 @@ class TestAirflowIntegration:
     def test_airflow_is_running(self, docker_services):
         """Test Airflow containers are running"""
         result = subprocess.run(
-            ["docker", "ps", "--filter", "name=airflow", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True
+            ["docker", "ps", "--filter", "name=airflow", "--format", "{{.Names}}"], capture_output=True, text=True
         )
         assert "airflow" in result.stdout
 
@@ -174,14 +167,14 @@ class TestDataQualityPipeline:
         """Test quarantine table has correct structure"""
         cursor = postgres_conn.cursor()
         cursor.execute("""
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
+            SELECT column_name, data_type
+            FROM information_schema.columns
             WHERE table_schema = 'quarantine' AND table_name = 'sales_failed'
             ORDER BY column_name
         """)
         columns = cursor.fetchall()
         column_names = [col[0] for col in columns]
-        
+
         assert "id" in column_names
         assert "payload" in column_names
         assert "error_reason" in column_names
@@ -193,13 +186,13 @@ class TestDataQualityPipeline:
         cursor = postgres_conn.cursor()
         cursor.execute("""
             SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns 
+            FROM information_schema.columns
             WHERE table_schema = 'silver' AND table_name = 'sales'
             ORDER BY column_name
         """)
         columns = cursor.fetchall()
         column_dict = {col[0]: {"type": col[1], "nullable": col[2]} for col in columns}
-        
+
         assert "sale_id" in column_dict
         assert "transaction_id" in column_dict
         assert "customer_id" in column_dict
@@ -208,22 +201,22 @@ class TestDataQualityPipeline:
     def test_quarantine_replay_function(self, postgres_conn):
         """Test quarantine replay functionality"""
         cursor = postgres_conn.cursor()
-        
+
         cursor.execute("SELECT COUNT(*) FROM quarantine.sales_failed WHERE replayed = false")
         before_count = cursor.fetchone()[0]
-        
+
         # Simulate replay
         cursor.execute("""
-            UPDATE quarantine.sales_failed 
-            SET replayed = true 
-            WHERE replayed = false 
+            UPDATE quarantine.sales_failed
+            SET replayed = true
+            WHERE replayed = false
             LIMIT 1
         """)
         postgres_conn.commit()
-        
+
         cursor.execute("SELECT COUNT(*) FROM quarantine.sales_failed WHERE replayed = false")
         after_count = cursor.fetchone()[0]
-        
+
         assert after_count < before_count or before_count == 0
 
 
@@ -234,17 +227,17 @@ class TestEndToEndIntegration:
     @pytest.mark.slow
     def test_full_data_quality_workflow(self, postgres_conn):
         """Test complete data quality workflow"""
-        
+
         # 1. Verify quarantine has expected structure
         cursor = postgres_conn.cursor()
         cursor.execute("""
-            SELECT COUNT(*), 
+            SELECT COUNT(*),
                    COUNT(CASE WHEN replayed THEN 1 END),
                    COUNT(CASE WHEN NOT replayed THEN 1 END)
             FROM quarantine.sales_failed
         """)
         result = cursor.fetchone()
-        
+
         total, replayed, pending = result
         assert total >= 0
         assert replayed >= 0
@@ -254,12 +247,12 @@ class TestEndToEndIntegration:
     @pytest.mark.slow
     def test_data_flow_bronze_to_silver(self, postgres_conn):
         """Test data flows from bronze to silver"""
-        
+
         # Check that silver has data
         cursor = postgres_conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM silver.sales")
         silver_count = cursor.fetchone()[0]
-        
+
         assert silver_count >= 0
 
 
@@ -269,13 +262,9 @@ class TestDockerCompose:
     @pytest.mark.integration
     def test_all_required_containers_running(self):
         """Test all required containers are running"""
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True)
         containers = result.stdout.strip().split("\n")
-        
+
         required = ["postgres", "airflow", "redis", "minio"]
         for req in required:
             assert any(req in c for c in containers), f"Container {req} not running"

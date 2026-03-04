@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+
 import pytest
 
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -39,6 +40,7 @@ def pytest_collectstart(collector):
         if mod_name == "utils" or mod_name.startswith("utils."):
             del sys.modules[mod_name]
 
+
 os.environ.setdefault("AIRFLOW__CORE__UNIT_TEST_MODE", "True")
 os.environ.setdefault("LOG_DIR", tempfile.mkdtemp())
 
@@ -46,32 +48,33 @@ os.environ.setdefault("LOG_DIR", tempfile.mkdtemp())
 @pytest.fixture
 def mock_postgres_connection():
     """Mock PostgreSQL connection for testing"""
+
     class MockConnection:
         def __init__(self):
             self.closed = False
-        
+
         def cursor(self):
             return MockCursor()
-        
+
         def commit(self):
             pass
-        
+
         def close(self):
             self.closed = True
-    
+
     class MockCursor:
         def __init__(self):
             self.executed_queries = []
-        
+
         def execute(self, query, params=None):
             self.executed_queries.append((query, params))
-        
+
         def fetchall(self):
             return []
-        
+
         def fetchone(self):
             return None
-    
+
     return MockConnection()
 
 
