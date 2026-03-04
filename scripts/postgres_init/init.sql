@@ -29,6 +29,18 @@ CREATE INDEX IF NOT EXISTS idx_metadata_status ON metadata.ingestion_metadata(st
 CREATE INDEX IF NOT EXISTS idx_metadata_ingest_date ON metadata.ingestion_metadata(ingest_date);
 CREATE INDEX IF NOT EXISTS idx_metadata_dataset ON metadata.ingestion_metadata(dataset_name);
 
+-- Quality baselines for drift detection
+CREATE TABLE IF NOT EXISTS metadata.quality_baselines (
+    id SERIAL PRIMARY KEY,
+    table_name VARCHAR(100),
+    metric_name VARCHAR(100),
+    metric_value DECIMAL(15,2),
+    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_baselines_lookup
+    ON metadata.quality_baselines (table_name, metric_name, recorded_at);
+
 -- Create quarantine schema for bad records (GAP 1)
 CREATE SCHEMA IF NOT EXISTS quarantine;
 
@@ -44,11 +56,15 @@ CREATE TABLE IF NOT EXISTS quarantine.sales_failed (
     corrected_at    TIMESTAMP WITH TIME ZONE,
     replayed        BOOLEAN DEFAULT FALSE,
     replayed_at     TIMESTAMP WITH TIME ZONE,
+    remediation_status TEXT NOT NULL DEFAULT 'pending',
+    retry_count     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (ingestion_run_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_quarantine_failed_at ON quarantine.sales_failed(failed_at);
 CREATE INDEX IF NOT EXISTS idx_quarantine_replayed ON quarantine.sales_failed(replayed);
+CREATE INDEX IF NOT EXISTS idx_quarantine_remediation_status ON quarantine.sales_failed(remediation_status);
+CREATE INDEX IF NOT EXISTS idx_quarantine_retry_count ON quarantine.sales_failed(retry_count);
 
 -- Create audit schema for tracking ingestion runs (GAP 2)
 CREATE SCHEMA IF NOT EXISTS audit;
@@ -232,6 +248,10 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA gold TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA metadata TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA quarantine TO airflow;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA audit TO airflow;
+
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA metadata TO airflow;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA silver TO airflow;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA gold TO airflow;
 
 -- Grant privileges for metabase
 GRANT ALL PRIVILEGES ON DATABASE metabase TO airflow;

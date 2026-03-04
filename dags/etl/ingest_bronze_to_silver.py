@@ -7,9 +7,6 @@ from airflow.decorators import task
 from airflow.models import Variable
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
-import sys
-sys.path.insert(0, "/opt/airflow/dags")
-
 from utils.email_utils import send_ingestion_alert
 from utils.minio_hook import MinIOHook
 from utils.postgres_hook import PostgresLayerHook

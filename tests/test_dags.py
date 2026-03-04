@@ -1,10 +1,5 @@
 import pytest
-import sys
-import os
 from unittest.mock import Mock, patch, MagicMock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "dags"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 
 class TestDataQualityDAG:
@@ -31,7 +26,7 @@ class TestDataQualityDAG:
     def test_dag_has_tasks(self):
         """Test DAG has all required tasks"""
         from data_quality import dag
-        task_ids = [task.task_id for task in dag.task_list]
+        task_ids = [task.task_id for task in dag.tasks]
 
         assert "validate_quarantine_patterns" in task_ids
         assert "profile_silver" in task_ids
@@ -54,7 +49,7 @@ class TestDataQualityDAG:
         """Test task dependencies are set correctly"""
         from data_quality import dag
 
-        task_map = {task.task_id: task for task in dag.task_list}
+        task_map = {task.task_id: task for task in dag.tasks}
 
         send_alerts = task_map.get("send_alerts")
         assert send_alerts is not None
@@ -79,7 +74,7 @@ class TestIngestBronzeToSilverDAG:
     def test_dag_has_tasks(self):
         """Test DAG has required tasks"""
         from ingest_bronze_to_silver import dag
-        task_ids = [task.task_id for task in dag.task_list]
+        task_ids = [task.task_id for task in dag.tasks]
 
         assert "discover_and_ingest" in task_ids
         assert "trigger_silver_to_gold" in task_ids
@@ -160,7 +155,7 @@ class TestDAGStructure:
 class TestDAGTaskLogic:
     """Test task logic in DAGs"""
 
-    @patch('data_quality.PostgresLayerHook')
+    @patch('utils.postgres_hook.PostgresLayerHook')
     def test_validate_quarantine_patterns_logic(self, mock_hook):
         """Test validate_quarantine_patterns task logic"""
         from data_quality import validate_quarantine_patterns
@@ -176,7 +171,7 @@ class TestDAGTaskLogic:
 
         assert result is not None
 
-    @patch('data_quality.PostgresLayerHook')
+    @patch('utils.postgres_hook.PostgresLayerHook')
     def test_profile_silver_logic(self, mock_hook):
         """Test profile_silver task logic"""
         from data_quality import profile_silver
@@ -192,7 +187,7 @@ class TestDAGTaskLogic:
 
         assert result is not None
 
-    @patch('data_quality.PostgresLayerHook')
+    @patch('utils.postgres_hook.PostgresLayerHook')
     def test_detect_drift_logic(self, mock_hook):
         """Test detect_drift task logic"""
         from data_quality import detect_drift

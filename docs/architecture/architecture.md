@@ -1,539 +1,306 @@
-# Mini Data Platform Architecture
+# Architecture Reference
 
-## Data Flow Architecture
-
-```mermaid
-flowchart TB
-    subgraph Source["Data Source"]
-        DG["Data Generator"]
-    end
-
-    subgraph Lake["MinIO (Data Lake)"]
-        Bronze["Bronze Layer<br/>(Parquet Files)"]
-    end
-
-    subgraph Airflow["Apache Airflow"]
-        DuckDB["DuckDB<br/>(Schema-on-Read)"]
-        Pipeline["ETL Pipelines"]
-        Quality["Data Quality<br/>(SQL-based)"]
-        Remediation["Remediation<br/>(Auto-fix)"]
-    end
-
-    subgraph DW["PostgreSQL"]
-        Metadata["Metadata<br/>(Ingestion State)"]
-        Quarantine["Quarantine<br/>(Failed Records)"]
-        Silver["Silver Layer<br/>(sales, customers, products)"]
-        Gold["Gold Layer<br/>(Aggregated)"]
-    end
-
-    subgraph Viz["Metabase"]
-        Dash["Dashboards"]
-    end
-
-    DG -->|Upload Parquet| Bronze
-    Bronze -->|Schema Validation| DuckDB
-    DuckDB -->|Clean & Transform| Pipeline
-    Pipeline --> Metadata
-    Pipeline --> Silver
-    Pipeline --> Quarantine
-    Silver --> Quality
-    Quality -->|PDF Report| Email
-    Quarantine -->|Auto-fix| Remediation
-    Remediation -->|Replay| Silver
-    Silver --> Gold
-    Gold --> Dash
-
-    style Lake fill:#4A90D9
-    style Airflow fill:#01778E
-    style Bronze fill:#CD7F32
-    style Silver fill:#C0C0C0
-    style Gold fill:#FFD700
-    style Quarantine fill:#E74C3C
-    style Metadata fill:#9B59B6
-    style DW fill:#336791
-    style Viz fill:#6B4C9A
-    style Quality fill:#27AE60
-    style Remediation fill:#E67E22
-```
-
----
-
-## Updated Data Flow Sequence Diagram
-
-```mermaid
-sequenceDiagram
-    participant DG as Data Generator
-    participant Bronze as MinIO (Bronze)
-    participant AF as Airflow + DuckDB
-    participant Quarantine as PostgreSQL (Quarantine)
-    participant Silver as PostgreSQL (Silver)
-    participant Quality as Data Quality
-    participant Gold as PostgreSQL (Gold)
-    participant Email as Email Alerts
-    participant MB as Metabase
-
-    Note over DG, Bronze: 1. Generate & Upload
-    DG->>Bronze: Upload Parquet Files
-
-    Note over Bronze, Silver: 2. Ingest & Validate
-    AF->>Bronze: Read with DuckDB
-    AF->>Bronze: Schema Validation
-    AF->>Silver: Insert Clean Data
-    AF->>Quarantine: Insert Failed Records
-
-    Note over Silver, Silver: 3. Populate Dimensions
-    AF->>Silver: Extract customers from sales
-    AF->>Silver: Extract products from sales
-
-    Note over Silver, Quarantine: 4. Quality Check
-    AF->>Silver: Profile all tables
-    AF->>Quarantine: Validate patterns
-    AF->>Quality: Detect drift
-    AF->>Quality: Generate PDF Report
-    Quality->>Email: Send email with PDF
-
-    Note over Quarantine, Silver: 5. Remediation (if needed)
-    AF->>Quarantine: Get failed records
-    AF->>Quarantine: Validate & Fix
-    AF->>Quarantine: Mark as replayed
-    AF->>Silver: Replay fixed records
-
-    Note over Silver, Gold: 6. Aggregate
-    AF->>Silver: Build dimensions
-    AF->>Gold: Daily aggregations
-
-    Note over Gold, MB: 7. Visualize
-    MB->>Gold: Query data
-    MB->>MB: Visualize
-```
-
----
-
-## DAG Pipeline Flow
-
-```mermaid
-flowchart LR
-    subgraph "Scheduled/Manual"
-        A[generate_sample_data]
-    end
-    
-    subgraph "ingest_bronze_to_silver"
-        B[discover_and_ingest]
-        C[populate_customers]
-        D[populate_products]
-    end
-    
-    subgraph "data_quality_checks"
-        E[validate_quarantine]
-        F[profile_silver]
-        G[detect_drift]
-        H[generate_data_docs]
-        I[send_alerts]
-    end
-    
-    subgraph "silver_to_gold"
-        J[populate_silver_customers]
-        K[populate_silver_products]
-        L[populate_gold_daily_sales]
-        M[populate_gold_product_performance]
-        N[populate_gold_store_performance]
-        O[populate_gold_customer_analytics]
-        P[populate_gold_category_insights]
-    end
-    
-    subgraph "remediation_workflow"
-        Q[get_quarantined]
-        R[validate_records]
-        S[fix_and_replay]
-        T[notify]
-    end
-    
-    A -->|Triggers| B
-    B --> C
-    B --> D
-    C --> E
-    D --> E
-    B --> E
-    E --> F
-    F --> G
-    G --> H
-    H --> I
-    I --> J
-    J --> K
-    K --> L
-    L --> M
-    M --> N
-    N --> O
-    O --> P
-    Q --> R
-    R --> S
-    S --> T
-```
-
-### DAG Details
-
-| DAG | Tasks | Description |
-|-----|-------|-------------|
-| `generate_sample_data` | 1 | Generates test data to MinIO |
-| `ingest_bronze_to_silver` | 3 | Bronze→Silver + dimension population |
-| `data_quality_checks` | 5 | SQL validation, profiling, PDF reports |
-| `silver_to_gold` | 7 | Star Schema aggregation (waits for data_quality_checks) |
-| `remediation_workflow` | 4 | Auto-fix quarantined records |
-
-### DAG Dependencies
-
-```
-generate_sample_data
-        ↓
-ingest_bronze_to_silver
-        ↓
-data_quality_checks (send_alerts)
-        ↓
-silver_to_gold (ExternalTaskSensor waits for data_quality_checks)
-        ↓
-Metabase Dashboards
-
-remediation_workflow (manual trigger)
-        ↓
-quarantine.sales_failed
-```
+This document provides detailed architectural diagrams for the Mini Data Platform. For the overview, see the [README](../../README.md).
 
 ---
 
 ## Services Architecture
 
 ```mermaid
-%%{init: {'theme': 'base'}}}
-flowchart LR
+flowchart TB
+    subgraph Docker["Docker Compose"]
+        direction TB
 
-    subgraph Services["DOCKER COMPOSE"]
-        direction LR
-        AF[Airflow<br/>+ DuckDB]
-        DB[(PostgreSQL<br/>Silver, Gold, Quarantine, Metadata)]
-        Redis[(Redis)]
-        MinIO[MinIO<br/>Bronze Layer]
-        MB[Metabase]
+        subgraph Core["Core Services"]
+            PG[(PostgreSQL 16<br/>Silver, Gold,<br/>Quarantine, Metadata)]
+            Redis[(Redis 7<br/>Celery Broker)]
+            MinIO["MinIO<br/>Bronze Layer"]
+        end
+
+        subgraph Airflow["Apache Airflow 3.x"]
+            API["API Server :8080"]
+            Sched["Scheduler"]
+            Worker["Celery Worker"]
+            Trigger["Triggerer"]
+            DagProc["DAG Processor"]
+            Init["Init (one-shot)"]
+        end
+
+        subgraph Monitoring["Observability Stack"]
+            StatsD["statsd-exporter<br/>:9102 / :9125"]
+            PGExp["postgres-exporter<br/>:9187"]
+            RedisExp["redis-exporter<br/>:9121"]
+            Prom["Prometheus<br/>:9090"]
+            Grafana["Grafana<br/>:3001"]
+        end
+
+        subgraph Analytics["Analytics"]
+            MB["Metabase :3000"]
+            DuckAPI["DuckDB API :8000"]
+        end
     end
 
-    AF --> DB
-    AF --> Redis
-    AF <--> MinIO
-    MB --> DB
+    %% Airflow -> Core
+    API & Sched & Worker & Trigger & DagProc --> PG
+    API & Sched & Worker & Trigger & DagProc --> Redis
+    Worker --> MinIO
+
+    %% Metrics flow
+    API & Sched & Worker & Trigger & DagProc -->|StatsD UDP| StatsD
+    StatsD --> Prom
+    MinIO -->|/minio/v2/metrics| Prom
+    PGExp -->|pg_stat| Prom
+    RedisExp -->|redis info| Prom
+    PGExp --> PG
+    RedisExp --> Redis
+    Prom --> Grafana
+
+    %% Analytics
+    MB --> PG
+    DuckAPI --> MinIO
 ```
 
 ---
 
-## Data Quality Architecture
+## Data Flow Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Input["Quality Inputs"]
-        Q[quarantine.sales_failed]
-        S[silver.sales]
-        C[silver.customers]
-        P[silver.products]
+    subgraph Bronze["Bronze Layer (MinIO)"]
+        Raw["s3://bronze/sales/<br/>ingest_date=YYYY-MM-DD/<br/>*.parquet"]
     end
 
-    subgraph Quality["Data Quality Pipeline"]
-        V[validate_quarantine]
-        Pr[profile_silver]
-        D[detect_drift]
-        G[generate_data_docs]
+    subgraph Validation["Two-Tier Validation"]
+        T1["Tier 1: Schema Drift<br/>(file-level, DuckDB)"]
+        T2["Tier 2: Row Validation<br/>(nulls, ranges, uniqueness)"]
     end
 
-    subgraph Output["Quality Outputs"]
-        PDF[PDF Report]
-        Email[Email Alert]
+    subgraph Silver["Silver Layer (PostgreSQL)"]
+        Sales["silver.sales<br/>(fact)"]
+        Customers["silver.customers<br/>(dimension)"]
+        Products["silver.products<br/>(dimension)"]
     end
 
-    Q --> V
-    S --> Pr
-    C --> Pr
-    P --> Pr
-    V --> D
-    Pr --> D
-    D --> G
-    G --> PDF
-    PDF --> Email
+    subgraph QLayer["Quarantine"]
+        QTable["quarantine.sales_failed<br/>payload + error_reason"]
+        QStatus["Status: pending →<br/>remediated | rejected | dead_letter"]
+    end
 
-    style Quality fill:#27AE60
-    style Output fill:#3498DB
+    subgraph Gold["Gold Layer (PostgreSQL)"]
+        Daily["gold.daily_sales"]
+        ProdPerf["gold.product_performance"]
+        CustAnal["gold.customer_analytics"]
+        StorePerf["gold.store_performance"]
+        CatIns["gold.category_insights"]
+    end
+
+    subgraph Tracking["Audit Trail"]
+        Meta["metadata.ingestion_metadata<br/>(file status)"]
+        Audit["audit.ingestion_runs<br/>(run counts)"]
+        Baselines["metadata.quality_baselines<br/>(drift detection)"]
+    end
+
+    Raw --> T1
+    T1 -->|schema valid| T2
+    T1 -->|schema drift| Meta
+    T2 -->|clean rows| Sales
+    T2 -->|bad rows| QTable
+    T2 --> Meta
+    T2 --> Audit
+
+    Sales --> Customers
+    Sales --> Products
+
+    Customers & Products --> Daily & ProdPerf & CustAnal & StorePerf & CatIns
+
+    QTable --> QStatus
+
+    style Bronze fill:#CD7F32,color:#fff
+    style Silver fill:#C0C0C0,color:#000
+    style Gold fill:#FFD700,color:#000
+    style QLayer fill:#E74C3C,color:#fff
+    style Tracking fill:#9B59B6,color:#fff
 ```
 
 ---
 
-## Remediation Workflow
+## Data Quality Pipeline
+
+```mermaid
+flowchart TB
+    subgraph Inputs["Quality Inputs"]
+        QT["quarantine.sales_failed"]
+        SS["silver.sales"]
+        SC["silver.customers"]
+        SP["silver.products"]
+        BL["metadata.quality_baselines"]
+    end
+
+    subgraph Checks["Parallel Quality Checks"]
+        C1["validate_quarantine_patterns"]
+        C2["profile_silver"]
+        C3["detect_drift"]
+        C4["check_completeness"]
+        C5["check_freshness"]
+        C6["check_referential_integrity"]
+    end
+
+    subgraph Output["Outputs"]
+        PDF["PDF Report<br/>(ReportLab)"]
+        Email["Email Alert<br/>(severity-throttled)"]
+    end
+
+    QT --> C1
+    SS & SC & SP --> C2
+    C2 --> C3
+    BL --> C3
+    SS & SC & SP --> C4
+    SS --> C5
+    SS & SC & SP --> C6
+
+    C1 & C2 & C3 & C4 & C5 & C6 --> PDF --> Email
+
+    style Checks fill:#27AE60,color:#fff
+    style Output fill:#3498DB,color:#fff
+```
+
+### Alert Severity Model
+
+| Severity | Throttle | Trigger |
+|----------|----------|---------|
+| CRITICAL | None (always send) | Schema drift, data loss |
+| WARNING | 1 hour | Drift > 10%, high quarantine rate, completeness < 95% |
+| INFO | 6 hours | Successful runs, no issues |
+
+---
+
+## Remediation Pipeline
 
 ```mermaid
 flowchart TD
-    Start[Quarantined Records] --> Get[Get Failed Records]
-    Get --> Validate[Validate Records]
-    
-    Validate --> Valid{Valid?}
-    Valid -->|Yes| Fix[Fix & Transform]
-    Valid -->|No| Reject[Mark as Rejected]
-    
-    Fix --> Insert[Insert to Silver]
-    Insert --> Update[Update Quarantine Status]
-    Reject --> Update
-    
-    Update --> Notify[Send Notification]
-    
-    style Valid fill:#27AE60
-    style Fix fill:#3498DB
-    style Reject fill:#E74C3C
+    Fetch["Fetch pending batch<br/>(WHERE remediation_status = 'pending'<br/>AND retry_count < max_retries<br/>LIMIT batch_size)"]
+
+    Fetch --> Validate["Validate records<br/>(required fields, ranges)"]
+
+    Validate --> Valid{"Fixable?"}
+
+    Valid -->|Yes| BatchUpsert["Batch upsert to silver<br/>(single executemany)"]
+    Valid -->|No| BatchReject["Batch reject<br/>(mark as rejected)"]
+
+    BatchUpsert --> TxCommit{"Transaction<br/>committed?"}
+
+    TxCommit -->|Yes| MarkRemediated["Mark remediation_status = 'remediated'"]
+    TxCommit -->|No| Rollback["ROLLBACK<br/>retry_count += 1"]
+
+    MarkRemediated --> MoreBatches{"More pending<br/>records?"}
+    Rollback --> MoreBatches
+    BatchReject --> MoreBatches
+
+    MoreBatches -->|Yes| Fetch
+    MoreBatches -->|No| DeadLetter["Escalate<br/>retry_count >= max_retries<br/>→ dead_letter"]
+
+    DeadLetter --> TriggerGold["Trigger silver_to_gold"]
+    TriggerGold --> Notify["Send email summary"]
+
+    style BatchUpsert fill:#27AE60,color:#fff
+    style BatchReject fill:#E74C3C,color:#fff
+    style DeadLetter fill:#8B0000,color:#fff
+    style Rollback fill:#E67E22,color:#fff
 ```
 
 ---
 
-## Testing & Validation
+## Monitoring Architecture
 
 ```mermaid
-%%{init: {'theme': 'base'}}}
 flowchart LR
-
-    subgraph Testing["TESTING & VALIDATION"]
-        direction TB
-        Unit[Unit Tests<br/>pytest]
-        Integration[Integration Tests<br/>Docker]
-        E2E[E2E Tests<br/>Full Pipeline]
-        Security[Security Scan<br/>safety, bandit]
+    subgraph Airflow["Airflow Services"]
+        API["api-server"]
+        Sched["scheduler"]
+        Worker["worker"]
+        Trig["triggerer"]
+        DP["dag-processor"]
     end
 
-    subgraph Data["DATA PIPELINE"]
-        direction LR
-        Bronze
-        Silver
-        Gold
+    subgraph Exporters["Metric Exporters"]
+        StatsD["statsd-exporter<br/>:9102"]
+        PGE["postgres-exporter<br/>:9187"]
+        RE["redis-exporter<br/>:9121"]
     end
 
-    Unit -->|Test Code| Data
-    Integration -->|Test Connect| Data
-    E2E -->|Validate Flow| Data
-    Security -->|Scan Code| Dev
+    subgraph Storage["MinIO"]
+        MinIO["MinIO<br/>/minio/v2/metrics/cluster"]
+    end
+
+    Prom["Prometheus<br/>:9090<br/>(scrape every 15s)"]
+    Graf["Grafana<br/>:3001<br/>(4 dashboards)"]
+
+    API & Sched & Worker & Trig & DP -->|UDP :9125| StatsD
+    StatsD -->|:9102| Prom
+    MinIO -->|:9000| Prom
+    PGE -->|:9187| Prom
+    RE -->|:9121| Prom
+    Prom --> Graf
 ```
+
+### Grafana Dashboards
+
+| Dashboard | Panels | Key Metrics |
+|-----------|--------|-------------|
+| Airflow Metrics | 8 | Scheduler heartbeat, DAG run duration, task finish rate, executor/pool slots |
+| MinIO Metrics | 6 | Bucket size, object count, S3 traffic, request/error rates, disk capacity |
+| PostgreSQL Metrics | 6 | Connections, DB size, tuple ops, transactions, cache hit ratio |
+| Redis Metrics | 6 | Memory, clients, commands/s, connections, keys, hit ratio |
+
+### StatsD Metric Mappings
+
+| StatsD Pattern | Prometheus Metric | Labels |
+|----------------|-------------------|--------|
+| `airflow.dagrun.duration.*.*` | `airflow_dagrun_duration_seconds` | `dag_id`, `state` |
+| `airflow.dag.*.*.duration` | `airflow_task_duration_seconds` | `dag_id`, `task_id` |
+| `airflow.ti.finish.*.*.*` | `airflow_ti_finish_total` | `dag_id`, `task_id`, `state` |
+| `airflow.scheduler.heartbeat` | `airflow_scheduler_heartbeat` | -- |
+| `airflow.executor.*_slots` | `airflow_executor_slots` | `state` |
+| `airflow.pool.*_slots.*` | `airflow_pool_slots` | `pool`, `state` |
 
 ---
 
 ## CI/CD Pipeline
 
 ```mermaid
-%%{init: {'theme': 'base'}}}
 flowchart LR
+    Push["Push / PR to master"] --> Lint["Lint & Type Check<br/>ruff, mypy"]
+    Push --> Unit["Unit Tests<br/>pytest + coverage"]
+    Push --> Security["Security Scan<br/>bandit, pip-audit"]
+    Lint & Unit & Security --> Build["Build & Push<br/>Docker → GHCR"]
 
-    subgraph CI["CI - ON PUSH/PR"]
-        direction TB
-        Lint[Lint & Format<br/>flake8, black, mypy]
-        Unit[Unit Tests<br/>pytest]
-        Build[Build Docker<br/>GHCR]
-    end
-
-    subgraph CD["CD - DEPLOY"]
-        direction TB
-        Integration[Integration Tests<br/>PostgreSQL, MinIO]
-        E2E[E2E Tests<br/>Full Stack]
-        Notify[GitHub Summary]
-    end
-
-    Push[Push/PR] --> CI
-    CI --> Lint
-    CI --> Unit
-    CI --> Build
-    Build --> CD
-    CD --> Integration
-    CD --> E2E
-    E2E --> Notify
-
-    style CI fill:#3498DB
-    style CD fill:#27AE60
-    style Push fill:#E74C3C
+    style Lint fill:#3498DB,color:#fff
+    style Unit fill:#3498DB,color:#fff
+    style Security fill:#3498DB,color:#fff
+    style Build fill:#27AE60,color:#fff
 ```
 
----
+### CI/CD Jobs
 
-## Complete System Overview
+| Job | Tools | Description |
+|-----|-------|-------------|
+| Lint & Type Check | ruff check, ruff format, mypy | Linting, formatting, type checking |
+| Unit Tests | pytest, pytest-cov | DAG imports, generator, remediation logic |
+| Security Scan | bandit, pip-audit | Code vulnerability + dependency audit |
+| Build & Push | Docker Buildx | Build image, push to GHCR (master only) |
 
-```mermaid
-%%{init: {'theme': 'base'}}}
-flowchart TB
+### Schema Reference
 
-    subgraph Dev["DEVELOPMENT"]
-        direction TB
-        DG[Data Generator]
-        Tests[Tests & Validation]
-        CI[GitHub Actions]
-    end
-
-    subgraph Runtime["RUNTIME ENVIRONMENT"]
-        direction LR
-        Lake[MinIO Bronze]
-        AF[Airflow + DuckDB]
-        Quality[Data Quality<br/>SQL-based]
-        DB[PostgreSQL<br/>Silver, Gold, Quarantine]
-        MB[Metabase]
-    end
-
-    DG -->|1. Generate| Lake
-    Lake -->|2. Process| AF
-    AF -->|3. Validate| Quality
-    Quality -->|4. Report| Email
-    AF -->|5. Store| DB
-    DB -->|6. Visualize| MB
-    
-    Tests -->|Validate| DG
-    CI -->|Deploy| Runtime
-```
-
----
-
-## Schema Summary
-
-### Bronze Layer (MinIO)
-- **Bucket**: `bronze`
-- **Format**: Parquet files
-- **Structure**: Partitioned by `ingest_date`
-
-### Silver Layer (PostgreSQL)
-- **Schema**: `silver`
-- **Tables**: 
-  - `sales` - Transaction fact table (populated from Bronze)
-  - `customers` - Customer dimension (populated from sales data)
-  - `products` - Product dimension (populated from sales data)
-
-### Quarantine Layer (PostgreSQL)
-- **Schema**: `quarantine`
-- **Tables**:
-  - `sales_failed` - Failed records awaiting remediation
-    - id, payload (JSONB), error_reason, failed_at, ingestion_run_id
-    - source_file, corrected_by, corrected_at, replayed, replayed_at
-
-### Gold Layer (PostgreSQL)
-- **Schema**: `gold`
-- **Tables**: Aggregated analytics
-  - `daily_sales` - Daily revenue metrics
-  - `product_performance` - Product-level analytics
-  - `customer_analytics` - Customer behavior + tier (Bronze/Silver/Gold/Platinum)
-  - `store_performance` - Store-level metrics
-  - `category_insights` - Category aggregates
-
-### Metadata Layer (PostgreSQL)
-- **Schema**: `metadata`
-- **Tables**:
-  - `ingestion_metadata` - Track processed files
-  - `audit.ingestion_runs` - Audit trail
-
----
-
-## Metabase Visualization Layer
-
-### Dashboard Architecture
-
-```mermaid
-flowchart TB
-    PG[(PostgreSQL)]
-    MB[Metabase]
-    Q[Questions]
-    D[Dashboards]
-    V[Views/Models]
-    
-    PG -->|Query Data| MB
-    MB --> V
-    V --> Q
-    Q --> D
-```
-
-### Pre-configured Dashboards
-
-| Dashboard | ID | Metrics | Charts |
-|-----------|-----|---------|--------|
-| Main Dashboard | 8 | KPIs + All metrics | Multiple |
-| Executive Summary | 3 | Revenue, Transactions, Customers | Line, Scalar |
-| Sales Overview | 2 | Daily sales trends | Line, Bar, Pie |
-| Product Analytics | 4 | Product revenue, categories | Bar, Pie |
-| Customer Analytics | 5 | Segments, LTV | Table, Pie |
-| Store Performance | 6 | Revenue by location | Bar |
-| Data Quality | 7 | Failed records, trends | Line, Bar, Table |
-
-### Data Quality Dashboard
-
-The Data Quality Dashboard provides real-time monitoring:
-
-**KPIs:**
-- Quarantine Records (total failed)
-- Quality Score (88.67%)
-- Total Records Processed
-- Pending Remediation
-
-**Visualizations:**
-- Records by Error Type (bar chart)
-- Failed Records Trend (line chart)
-- Records by Source File (pie chart)
-- Recent Failed Records (table)
-
-### Database Connection Setup
-
-1. Navigate to Metabase Admin > Databases
-2. Add PostgreSQL database:
-   ```
-   Host: postgres
-   Port: 5432
-   Database: airflow
-   Username: airflow
-   Password: airflow
-   ```
-
-### SQL Queries Documentation
-
-All dashboard queries are documented in `docs/dashboard_queries.sql`:
-- 40+ queries organized by dashboard
-- Section 1: Main Dashboard (11 queries)
-- Section 2: Executive Summary (6 queries)
-- Section 3: Sales Overview (5 queries)
-- Section 4: Product Analytics (4 queries)
-- Section 5: Customer Analytics (5 queries)
-- Section 6: Store Performance (4 queries)
-- Section 7: Data Quality (9 queries)
-- Additional insights and schema reference
-
-### Recommended Visualizations
-
-- **Time Series**: Daily sales trends (line chart)
-- **Categorical**: Revenue by product category (pie/bar)
-- **Ranking**: Top 10 products/customers (table with ranking)
-- **Geographic**: Sales by store location (map)
-
----
-
-## Metabase Setup Guide
-
-See `notes/METABASE_SETUP_GUIDE.md` for detailed instructions on:
-
-### Creating Questions
-1. Click "+ New" → Select "SQL query"
-2. Select database "Mini Data Platform"
-3. Write SQL query and click "Run"
-4. Choose visualization type (Table, Line, Bar, Pie, Scalar)
-5. Save to a collection
-
-### Creating Collections
-1. Click "+" in the sidebar → "New collection"
-2. Name the collection (e.g., "Sales Analytics")
-3. Organize questions and dashboards
-
-### Creating Tabbed Dashboards
-1. Click "+ New" → "Dashboard"
-2. In edit mode, click "Add a tab"
-3. Create tabs for each section
-4. Drag questions into each tab
-
-### Adding Filters
-1. In dashboard edit mode, click "Add a filter"
-2. Choose filter type (Date, Category, etc.)
-3. Connect filters to visualizations
-
-### Quick Access
-
-| Dashboard | URL |
-|-----------|-----|
-| Main Dashboard | http://localhost:3000/dashboard/8-main-dashboard |
-| Data Quality | http://localhost:3000/dashboard/7-data-quality |
+| Schema.Table | Key Columns |
+|---|---|
+| `silver.sales` | sale_id (PK), transaction_id (UK), sale_date, customer_id, product_id, quantity, unit_price, net_amount, processed_at |
+| `silver.customers` | customer_id (PK), customer_name, first_purchase_date, total_purchases, total_revenue, customer_segment |
+| `silver.products` | product_id (PK), product_name, category, sub_category, avg_unit_price, total_quantity_sold |
+| `quarantine.sales_failed` | id + ingestion_run_id (PK), payload (JSONB), error_reason, remediation_status, retry_count, replayed |
+| `gold.daily_sales` | sale_date (PK), total_transactions, gross_revenue, net_revenue, unique_customers |
+| `gold.product_performance` | product_id (PK), total_revenue, number_of_transactions |
+| `gold.customer_analytics` | customer_id (PK), total_revenue, customer_tier, favorite_category |
+| `gold.store_performance` | store_location (PK), total_revenue, total_customers_served |
+| `gold.category_insights` | category (PK), total_revenue, total_products_sold |
+| `metadata.ingestion_metadata` | file_path (PK), dataset_name, status, record_count, checksum |
+| `audit.ingestion_runs` | ingestion_run_id (PK), rows_read, rows_written_silver, rows_quarantined, status |

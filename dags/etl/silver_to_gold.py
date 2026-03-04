@@ -5,9 +5,6 @@ from airflow.decorators import task
 from airflow.models import Variable
 from airflow.operators.empty import EmptyOperator
 
-import sys
-sys.path.insert(0, "/opt/airflow/dags")
-
 from utils.postgres_hook import PostgresLayerHook
 
 

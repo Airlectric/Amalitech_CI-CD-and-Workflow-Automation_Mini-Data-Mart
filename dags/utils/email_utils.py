@@ -368,7 +368,7 @@ def send_data_quality_alert(
 
     q_stats = quarantine_stats.get("stats", {})
     pending = quarantine_stats.get("pending", 0)
-    replayed = quarantine_stats.get("replayed", 0)
+    remediated = quarantine_stats.get("remediated", 0)
 
     html_body = f"""
     <html>
@@ -381,12 +381,16 @@ def send_data_quality_alert(
             <tr style="background: #ecf0f1;">
                 <th style="padding: 10px; border: 1px solid #bdc3c7;">Total</th>
                 <th style="padding: 10px; border: 1px solid #bdc3c7;">Pending</th>
-                <th style="padding: 10px; border: 1px solid #bdc3c7;">Replayed</th>
+                <th style="padding: 10px; border: 1px solid #bdc3c7;">Remediated</th>
+                <th style="padding: 10px; border: 1px solid #bdc3c7;">Rejected</th>
+                <th style="padding: 10px; border: 1px solid #bdc3c7;">Dead Letter</th>
             </tr>
             <tr>
                 <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats.get('total_quarantined', 0)}</td>
                 <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if pending > 0 else '#d5f5e3'};">{pending}</td>
-                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{replayed}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{remediated}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center;">{q_stats.get('rejected', 0)}</td>
+                <td style="padding: 10px; border: 1px solid #bdc3c7; text-align: center; background: {'#fadbd8' if q_stats.get('dead_letter', 0) > 0 else '#d5f5e3'};">{q_stats.get('dead_letter', 0)}</td>
             </tr>
         </table>
 

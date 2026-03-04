@@ -1,471 +1,653 @@
 # Mini Data Platform
 
-[![CI/CD Pipeline](https://github.com/${{ github.repository }}/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/ci-cd.yml)
-[![Python Version](https://img.shields.io/badge/python-3.11-blue)](https://www.python.org/)
-[![Docker](https://img.shields.io/badge/docker-ready-blue)](https://www.docker.com/)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Airflow 3.x](https://img.shields.io/badge/Airflow-3.x-017CEE?logo=apache-airflow&logoColor=white)](https://airflow.apache.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License: Educational](https://img.shields.io/badge/license-educational-green)](./LICENSE)
 
-> A production-grade containerized data platform using Docker Compose that implements medallion architecture (Bronze → Silver → Gold) with Star Schema, CI/CD automation, and data quality monitoring.
+A production-grade containerized data platform implementing the **Medallion Architecture** (Bronze, Silver, Gold) with automated data quality monitoring, self-healing remediation, and full observability.
 
-## Architecture Overview
+---
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Services and Access](#services-and-access)
+- [Project Structure](#project-structure)
+- [Data Pipeline](#data-pipeline)
+- [Data Quality Framework](#data-quality-framework)
+- [Remediation Workflow](#remediation-workflow)
+- [Monitoring and Observability](#monitoring-and-observability)
+- [Database Schema](#database-schema)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [Metabase Dashboards](#metabase-dashboards)
+- [Testing](#testing)
+- [Configuration Reference](#configuration-reference)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Architecture
+
+### System Overview
+
+```mermaid
+flowchart TB
+    subgraph Sources["Data Sources"]
+        DG["Data Generator<br/>(6 quality modes)"]
+    end
+
+    subgraph Lake["Object Storage"]
+        Bronze["MinIO<br/>Bronze Layer<br/>(Parquet)"]
+    end
+
+    subgraph Orchestration["Apache Airflow"]
+        Ingest["Ingest DAG<br/>(DuckDB validation)"]
+        Quality["Quality DAG<br/>(6 parallel checks)"]
+        Gold_DAG["Gold DAG<br/>(Star Schema)"]
+        Remediation["Remediation DAG<br/>(batch replay)"]
+    end
+
+    subgraph Database["PostgreSQL"]
+        Meta["metadata / audit"]
+        Quarantine["quarantine<br/>(failed records)"]
+        Silver["Silver Layer<br/>(sales, customers, products)"]
+        Gold["Gold Layer<br/>(5 fact tables, 2 views)"]
+    end
+
+    subgraph Monitoring["Observability"]
+        StatsD["statsd-exporter"]
+        Prom["Prometheus"]
+        Grafana["Grafana<br/>(4 dashboards)"]
+    end
+
+    subgraph Analytics["Analytics"]
+        MB["Metabase<br/>(7 dashboards)"]
+        DuckAPI["DuckDB API<br/>(ad-hoc SQL)"]
+    end
+
+    DG -->|Parquet| Bronze
+    Bronze -->|schema-on-read| Ingest
+    Ingest -->|clean rows| Silver
+    Ingest -->|bad rows| Quarantine
+    Ingest -->|file tracking| Meta
+    Ingest -->|triggers| Gold_DAG
+    Silver --> Quality
+    Quality -->|PDF + email| Alerts["Alerts"]
+    Quarantine --> Remediation
+    Remediation -->|batch upsert| Silver
+    Remediation -->|triggers| Gold_DAG
+    Silver --> Gold_DAG
+    Gold_DAG --> Gold
+    Gold --> MB
+    Bronze --> DuckAPI
+
+    Orchestration -->|StatsD UDP| StatsD
+    StatsD --> Prom
+    Prom --> Grafana
+
+    style Bronze fill:#CD7F32,color:#fff
+    style Silver fill:#C0C0C0,color:#000
+    style Gold fill:#FFD700,color:#000
+    style Quarantine fill:#E74C3C,color:#fff
+    style Meta fill:#9B59B6,color:#fff
+```
+
+### Data Flow Sequence
+
+```mermaid
+sequenceDiagram
+    participant DG as Data Generator
+    participant S3 as MinIO (Bronze)
+    participant AF as Airflow + DuckDB
+    participant QR as Quarantine
+    participant SV as Silver
+    participant QA as Quality Checks
+    participant GD as Gold
+    participant MB as Metabase
+    participant GF as Grafana
+
+    Note over DG,S3: Phase 1 - Generate
+    DG->>S3: Upload Parquet (clean/dirty/mixed/duplicates/schema-invalid)
+
+    Note over S3,SV: Phase 2 - Ingest with Quality Gates
+    AF->>S3: Read via DuckDB (schema-on-read)
+    AF->>AF: Tier 1: Schema drift detection (file-level)
+    AF->>AF: Tier 2: Row validation (nulls, ranges, uniqueness)
+    AF->>SV: Upsert clean rows
+    AF->>QR: Insert bad rows with error_reason + payload
+
+    Note over SV,GD: Phase 3 - Build Star Schema
+    AF->>SV: Derive customer/product dimensions
+    AF->>GD: Aggregate into 5 fact tables
+
+    Note over SV,QA: Phase 4 - Quality Monitoring (every 6h)
+    AF->>QA: Quarantine validation, profiling, drift, completeness, freshness, integrity
+    QA->>QA: Generate PDF report
+    QA->>QA: Send email alert (severity-throttled)
+
+    Note over QR,SV: Phase 5 - Remediation (manual trigger)
+    AF->>QR: Fetch pending records (paginated batches)
+    AF->>AF: Validate fixable vs unfixable
+    AF->>SV: Batch upsert fixed records (single transaction)
+    AF->>QR: Mark remediated/rejected/dead-letter
+    AF->>GD: Trigger gold rebuild
+
+    Note over GD,GF: Phase 6 - Observe
+    GD->>MB: Business dashboards
+    AF->>GF: System metrics (Airflow, MinIO, PostgreSQL, Redis)
+```
+
+---
+
+## Tech Stack
+
+| Component | Technology | Port | Purpose |
+|-----------|-----------|------|---------|
+| Object Storage | MinIO | 9002 / 9003 | Bronze layer (Parquet files) |
+| Query Engine | DuckDB | -- | Schema-on-read validation (no data download) |
+| Database | PostgreSQL 16 | 5433 | Silver / Gold / Metadata / Quarantine |
+| Orchestration | Apache Airflow 3.x | 8080 | DAG scheduling and execution |
+| Task Queue | Redis 7 | 6379 | Celery broker for Airflow workers |
+| BI Dashboards | Metabase | 3000 | Business analytics |
+| Ad-hoc Query | DuckDB API (FastAPI) | 8000 | SQL-on-S3 web interface |
+| Metrics | Prometheus | 9090 | Time-series metric storage |
+| Visualization | Grafana | 3001 | System monitoring dashboards |
+| StatsD Bridge | statsd-exporter | 9102 / 9125 | Airflow StatsD to Prometheus |
+| DB Metrics | postgres-exporter | 9187 | PostgreSQL metrics for Prometheus |
+| Cache Metrics | redis-exporter | 9121 | Redis metrics for Prometheus |
+| CI/CD | GitHub Actions | -- | Lint, test, build, deploy |
+
+---
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose v2+
+- [Git](https://git-scm.com/)
+- 8 GB+ RAM recommended
+
+---
+
+## Quick Start
+
+```bash
+# Clone
+git clone <repo-url>
+cd Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart
+
+# Start all services
+docker compose up -d --build
+
+# Wait for initialization (~2 minutes)
+docker compose ps
+
+# Verify data pipeline
+docker compose exec postgres psql -U airflow -d airflow \
+  -c "SELECT COUNT(*) FROM silver.sales"
+```
+
+---
+
+## Services and Access
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Airflow UI | http://localhost:8080 | admin / airflow |
+| Metabase | http://localhost:3000 | Set up on first visit |
+| Grafana | http://localhost:3001 | admin / admin (or anonymous) |
+| MinIO Console | http://localhost:9003 | minio / minio123 |
+| DuckDB API | http://localhost:8000 | -- |
+| Prometheus | http://localhost:9090 | -- |
+| PostgreSQL | localhost:5433 | airflow / airflow |
+
+---
+
+## Project Structure
 
 ```
-Data Generator → MinIO (Bronze) → Airflow + DuckDB → PostgreSQL (Silver/Gold) → Metabase
-                                            ↓
-                              Data Quality (SQL-based) + PDF Reports
-                                            ↓
-                              Remediation Workflow (Auto-fix)
+.
+├── .github/workflows/          # CI/CD pipeline definitions
+├── config/                     # Monitoring stack configuration
+│   ├── grafana/
+│   │   ├── dashboards/         # Pre-built Grafana dashboard JSON
+│   │   │   ├── airflow-metrics.json
+│   │   │   ├── minio-metrics.json
+│   │   │   ├── postgres-metrics.json
+│   │   │   └── redis-metrics.json
+│   │   └── provisioning/       # Auto-provisioning configs
+│   │       ├── dashboards/
+│   │       └── datasources/
+│   ├── prometheus/
+│   │   └── prometheus.yml      # Scrape targets
+│   └── statsd-exporter/
+│       └── mappings.yml        # Airflow metric name mappings
+├── dags/                       # Airflow DAG definitions
+│   ├── etl/
+│   │   ├── generate_sample_data.py
+│   │   ├── ingest_bronze_to_silver.py
+│   │   ├── silver_to_gold.py
+│   │   ├── data_quality.py
+│   │   └── remediation.py
+│   └── utils/
+│       ├── postgres_hook.py
+│       ├── minio_hook.py
+│       ├── duckdb_utils.py
+│       └── email_utils.py
+├── scripts/
+│   ├── data_generator/         # Synthetic data generator
+│   ├── postgres_init/          # Database DDL (init.sql)
+│   └── init-minio.sh           # MinIO bucket creation
+├── services/
+│   └── duckdb-api/             # FastAPI ad-hoc query service
+├── tests/                      # Unit, integration, E2E tests
+├── docs/                       # Architecture docs, SQL queries
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── .env
 ```
 
-## New Features (Latest Updates)
+---
 
-- ✅ **Silver Layer Population**: Customers & Products now populated during `ingest_bronze_to_silver`
-- ✅ **Comprehensive Data Quality**: Validates all 3 Silver tables (sales, customers, products)
-- ✅ **SQL-Based Quality Checks**: No external dependencies - pure SQL queries for validation
-- ✅ **PDF Reports**: Data quality reports generated as PDF and attached to emails
-- ✅ **Remediation Workflow**: Automatic fixing and replaying of quarantined records
-- ✅ **CI/CD Pipeline**: GitHub Actions with unit, integration, and E2E tests
-- ✅ **Metabase Dashboards**: 7 pre-configured dashboards with KPIs and visualizations
-- ✅ **Data Quality Dashboard**: Real-time monitoring of quarantine trends and remediation status
+## Data Pipeline
 
-## Star Schema Design
+### DAG Overview
 
-This platform implements a proper **Star Schema** for data warehousing.
+| DAG | Schedule | Trigger | Description |
+|-----|----------|---------|-------------|
+| `generate_sample_data` | `0 6,12,18 * * *` | Scheduled | Generates 1000 rows per mode to MinIO |
+| `ingest_bronze_to_silver` | `0 */6 * * *` | Scheduled | Two-tier validation, split good/bad rows |
+| `silver_to_gold` | None | Triggered by ingestion / remediation | Builds star schema (dimensions then facts) |
+| `data_quality_checks` | `0 */6 * * *` | Scheduled | 6 parallel quality checks, PDF report |
+| `remediation_workflow` | None | Manual | Batch fix and replay quarantined records |
+
+### DAG Dependency Graph
+
+```mermaid
+flowchart LR
+    A["generate_sample_data<br/><i>3x daily</i>"] -->|Parquet to MinIO| B
+
+    subgraph Ingestion
+        B["ingest_bronze_to_silver<br/><i>every 6h</i>"]
+    end
+
+    B -->|TriggerDagRunOperator| C["silver_to_gold"]
+
+    subgraph Quality
+        D["data_quality_checks<br/><i>every 6h</i>"]
+    end
+
+    subgraph Remediation
+        E["remediation_workflow<br/><i>manual</i>"]
+    end
+
+    E -->|TriggerDagRunOperator| C
+    B -.->|data available| D
+```
+
+### Medallion Architecture
+
+```
+Bronze (MinIO)                    Silver (PostgreSQL)              Gold (PostgreSQL)
+─────────────────                 ─────────────────────            ──────────────────
+s3://bronze/sales/                silver.sales (fact)              gold.daily_sales
+  ingest_date=YYYY-MM-DD/        silver.customers (dim)           gold.product_performance
+    <uuid>.parquet                silver.products (dim)            gold.customer_analytics
+                                                                   gold.store_performance
+                                                                   gold.category_insights
+                                                                   gold.v_monthly_sales (view)
+                                                                   gold.v_regional_sales (view)
+```
+
+### Two-Tier Validation
+
+**Tier 1 -- File-Level (Schema Drift Detection)**
+
+Compares actual Parquet columns against expected spec. If there is a mismatch (missing columns, extra columns, type changes), the entire file is rejected with status `SCHEMA_DRIFT` in `metadata.ingestion_metadata`. The file is never re-read on subsequent runs.
+
+**Tier 2 -- Row-Level Validation**
+
+For schema-valid files, each row is checked for:
+- Required columns: `transaction_id`, `sale_date`, `customer_id`, `product_id`, `quantity`, `unit_price`, `net_amount`
+- Value ranges: quantity [1, 1000], unit_price [0, 100000], discount_percentage [0, 100]
+- Rows failing validation are tagged with `error_reason` (e.g., `null:customer_id;range:quantity`) and sent to quarantine with the full payload preserved as JSONB.
+
+---
+
+## Data Quality Framework
+
+Six checks run in parallel every 6 hours:
+
+| Check | What It Validates | Threshold |
+|-------|-------------------|-----------|
+| Quarantine Patterns | No NULL ids/payloads/errors in quarantine table | 0 nulls |
+| Silver Profiling | Row counts across `sales`, `customers`, `products` | Tables populated |
+| Drift Detection | Current row count vs 24-hour baseline | < 10% change |
+| Completeness | Non-null percentage for critical columns | >= 95% |
+| Freshness | Time since last `processed_at` in `silver.sales` | <= 24 hours |
+| Referential Integrity | Orphan `customer_id` / `product_id` in sales | 0 orphans |
+
+**Outputs:**
+- PDF report generated via ReportLab with all check results
+- Email alert with PDF attachment (severity-throttled: CRITICAL immediate, WARNING 1h, INFO 6h)
+
+---
+
+## Remediation Workflow
+
+The `remediation_workflow` DAG processes quarantined records with production-grade patterns:
+
+```mermaid
+flowchart TD
+    Start["Fetch pending batch<br/>(configurable size)"] --> Validate["Validate records"]
+
+    Validate --> Valid{"Fixable?"}
+    Valid -->|Yes| Batch["Batch upsert to silver<br/>(single transaction)"]
+    Valid -->|No| Reject["Batch reject<br/>(mark as rejected)"]
+
+    Batch --> Mark["Mark as remediated"]
+    Batch -->|Transaction failed| Retry["Increment retry_count"]
+    Reject --> More{"More batches?"}
+    Mark --> More
+    Retry --> More
+
+    More -->|Yes| Start
+    More -->|No| DeadLetter["Escalate records with<br/>retry_count >= max to dead-letter"]
+
+    DeadLetter --> Trigger["Trigger silver_to_gold<br/>rebuild"]
+    Trigger --> Notify["Send email notification"]
+```
+
+**Key design decisions:**
+
+| Concern | Implementation |
+|---------|---------------|
+| Batch operations | All valid records upserted in one `executemany` call, not row-by-row |
+| Transactional consistency | Silver insert + quarantine update in a single `COMMIT`; `ROLLBACK` on failure |
+| Status tracking | `remediation_status` enum: `pending` / `remediated` / `rejected` / `dead_letter` |
+| Dead-letter escalation | After `retry_count >= max_retries` (default 3), records move to `dead_letter` |
+| Pagination | Processes batches until no pending records remain |
+| Configurable | `remediation_batch_size` and `remediation_max_retries` via Airflow Variables |
+| Gold rebuild | `TriggerDagRunOperator` fires `silver_to_gold` after remediation completes |
+
+---
+
+## Monitoring and Observability
+
+### Metrics Pipeline
+
+```
+Airflow (scheduler/worker/api-server/triggerer/dag-processor)
+    │  StatsD UDP :9125
+    v
+statsd-exporter (:9102)  ──┐
+MinIO (/minio/v2/metrics)  ├──> Prometheus (:9090) ──> Grafana (:3001)
+postgres-exporter (:9187)  │
+redis-exporter (:9121)   ──┘
+```
+
+All five Airflow services emit StatsD metrics. Prometheus scrapes four exporters every 15 seconds. Grafana auto-provisions four dashboards on startup.
+
+### Grafana Dashboards
+
+| Dashboard | Key Panels |
+|-----------|-----------|
+| **Airflow Metrics** | Scheduler heartbeat rate, loop duration, DAG run duration, task finish rate, executor slots, pool usage |
+| **MinIO Metrics** | Bucket size, object count, S3 traffic rate, request rate by API, error rate, cluster disk capacity |
+| **PostgreSQL Metrics** | Active connections, connection utilization, database size, tuple operations rate, transaction commits/rollbacks, cache hit ratio |
+| **Redis Metrics** | Memory usage, connected/blocked clients, commands processed rate, connection rate, keys per database, keyspace hit ratio |
+
+### Verification
+
+```bash
+# Check Prometheus targets are up
+curl -s http://localhost:9090/api/v1/targets | python3 -m json.tool
+
+# Query a metric
+curl -s 'http://localhost:9090/api/v1/query?query=airflow_scheduler_heartbeat'
+
+# Open Grafana (anonymous access enabled)
+open http://localhost:3001
+```
+
+---
+
+## Database Schema
+
+### Star Schema (ER Diagram)
 
 ```mermaid
 erDiagram
     SILVER_SALES {
-        int sale_id PK
-        string transaction_id UK
+        serial sale_id PK
+        varchar transaction_id UK
         date sale_date
         int sale_hour
-        string customer_id FK
-        string product_id FK
-        string store_location FK
+        varchar customer_id FK
+        varchar product_id FK
         int quantity
         decimal unit_price
         decimal net_amount
+        timestamp processed_at
     }
     SILVER_CUSTOMERS {
-        string customer_id PK
-        string customer_name
+        varchar customer_id PK
+        varchar customer_name
         date first_purchase_date
         int total_purchases
         decimal total_revenue
-        string customer_segment
+        varchar customer_segment
     }
     SILVER_PRODUCTS {
-        string product_id PK
-        string product_name
-        string category
-        string sub_category
+        varchar product_id PK
+        varchar product_name
+        varchar category
+        decimal avg_unit_price
+        int total_quantity_sold
     }
     GOLD_DAILY_SALES {
         date sale_date PK
         int total_transactions
-        int total_quantity_sold
         decimal gross_revenue
         decimal net_revenue
+        int unique_customers
     }
     GOLD_PRODUCT_PERFORMANCE {
-        string product_id PK
-        string product_name
-        string category
+        varchar product_id PK
         decimal total_revenue
+        int number_of_transactions
     }
     GOLD_CUSTOMER_ANALYTICS {
-        string customer_id PK
-        string customer_name
-        int total_purchases
+        varchar customer_id PK
         decimal total_revenue
-        string customer_tier
+        varchar customer_tier
+        varchar favorite_category
     }
     GOLD_STORE_PERFORMANCE {
-        string store_location PK
-        string region
+        varchar store_location PK
         decimal total_revenue
+        int total_customers_served
     }
     GOLD_CATEGORY_INSIGHTS {
-        string category PK
-        int total_products_sold
+        varchar category PK
         decimal total_revenue
+        int total_products_sold
     }
 
     SILVER_SALES }o--|| SILVER_CUSTOMERS : "customer_id"
     SILVER_SALES }o--|| SILVER_PRODUCTS : "product_id"
 ```
 
-### All Tables
+### Schema Overview
 
-#### Silver Layer (Schema: `silver`)
+| Schema | Table | Purpose |
+|--------|-------|---------|
+| `silver` | `sales` | Cleaned transaction fact table |
+| `silver` | `customers` | Customer dimension (derived from sales) |
+| `silver` | `products` | Product dimension (derived from sales) |
+| `gold` | `daily_sales` | Daily aggregated metrics |
+| `gold` | `product_performance` | Product-level KPIs |
+| `gold` | `customer_analytics` | Customer segments and behavior |
+| `gold` | `store_performance` | Store-level metrics |
+| `gold` | `category_insights` | Category aggregates |
+| `gold` | `v_monthly_sales` | Monthly trends (view) |
+| `gold` | `v_regional_sales` | Regional performance (view) |
+| `quarantine` | `sales_failed` | Failed records with payload, error, retry tracking |
+| `metadata` | `ingestion_metadata` | File processing status (PROCESSED / SCHEMA_DRIFT / FAILED) |
+| `metadata` | `quality_baselines` | Historical metrics for drift detection |
+| `audit` | `ingestion_runs` | Per-run audit trail (rows read/written/quarantined) |
 
-| Table | Type | Description |
-|-------|------|-------------|
-| `sales` | Fact | Transaction records (populated from Bronze) |
-| `customers` | Dimension | Customer profiles (populated from Bronze during ingest) |
-| `products` | Dimension | Product catalog (populated from Bronze during ingest) |
+### Column Reference
 
-#### Gold Layer (Schema: `gold`)
+**silver.sales**: sale_id (PK), transaction_id (UK), sale_date, sale_hour, customer_id, customer_name, product_id, product_name, category, sub_category, quantity, unit_price, discount_percentage, discount_amount, gross_amount, net_amount, profit_margin, payment_method, payment_category, store_location, region, is_weekend, is_holiday, ingest_date, source_file, processed_at
 
-| Table | Type | Primary Key | Description |
-|-------|------|-------------|-------------|
-| `daily_sales` | Fact | `sale_date` | Daily aggregated metrics |
-| `product_performance` | Fact | `product_id` | Product analytics |
-| `customer_analytics` | Fact | `customer_id` | Customer behavior |
-| `store_performance` | Fact | `store_location` | Store metrics |
-| `category_insights` | Fact | `category` | Category aggregates |
-| `v_monthly_sales` | View | — | Monthly aggregated view |
-| `v_regional_sales` | View | — | Regional sales view |
+**silver.customers**: customer_id (PK), customer_name, first_purchase_date, total_purchases, total_revenue, average_order_value, customer_segment, last_purchase_date, days_since_last_purchase
 
-### Quarantine Schema
+**silver.products**: product_id (PK), product_name, category, sub_category, min_unit_price, max_unit_price, avg_unit_price, total_quantity_sold, total_revenue
 
-| Table | Type | Description |
-|-------|------|-------------|
-| `sales_failed` | Quarantine | Failed records pending remediation |
+**quarantine.sales_failed**: id + ingestion_run_id (composite PK), payload (JSONB), error_reason, failed_at, source_file, corrected_by, corrected_at, replayed, replayed_at, remediation_status, retry_count
 
-## Tech Stack
+**gold.daily_sales**: sale_date (PK), total_transactions, total_quantity_sold, gross_revenue, total_discounts, net_revenue, average_order_value, unique_customers, unique_products, top_category
 
-| Component       | Technology       | Port      | Purpose                          |
-|-----------------|------------------|-----------|----------------------------------|
-| Data Lake       | MinIO            | 9002/9003 | Bronze layer (Parquet files)     |
-| Query Engine    | DuckDB           | —         | Schema-on-read validation        |
-| Database        | PostgreSQL 16    | 5433      | Silver/Gold layers + Metadata    |
-| Orchestration   | Apache Airflow   | 8080      | ETL pipeline scheduling          |
-| Visualization   | Metabase         | 3000      | BI dashboards & reporting        |
-| CI/CD           | GitHub Actions   | —         | Automated pipelines              |
+**gold.product_performance**: product_id (PK), product_name, category, total_quantity_sold, total_revenue, average_unit_price, total_discount_given, number_of_transactions
 
-## Prerequisites
+**gold.customer_analytics**: customer_id (PK), customer_name, total_purchases, total_revenue, average_order_value, favorite_category, favorite_payment_method, most_visited_store, customer_tier
 
-- [Docker](https://docs.docker.com/get-docker/) & Docker Compose v2+
-- [Git](https://git-scm.com/)
-- 8GB+ RAM recommended
+**gold.store_performance**: store_location (PK), region, total_transactions, total_revenue, average_order_value, total_customers_served, top_selling_category
 
-## Quick Start
+**gold.category_insights**: category (PK), total_products_sold, total_revenue, average_discount_percentage, number_of_transactions, average_order_value
 
-```bash
-# 1. Clone the repository
-git clone <repo-url>
-cd Amalitech_CI-CD-and-Workflow-Automation_Mini-Data-Mart
+**metadata.ingestion_metadata**: file_path (PK), dataset_name, checksum, ingest_date, status, record_count, processed_at, airflow_run_id, error_message
 
-# 2. Start all services
-docker compose up -d --build
-
-# 3. Wait for services to initialize (~2 minutes)
-docker compose ps
-
-# 4. Access the services (see table below)
-```
-
-## Services & Credentials
-
-| Service         | URL                          | Credentials             |
-|-----------------|------------------------------|------------------------|
-| Airflow UI      | http://localhost:8080        | admin / airflow        |
-| Metabase        | http://localhost:3000        | Set up on first visit  |
-| MinIO Console   | http://localhost:9003        | minio / minio123       |
-| PostgreSQL      | localhost:5433               | airflow / airflow      |
-
-## Project Structure
+### Quarantine Record Lifecycle
 
 ```
-.
-├── .github/workflows/       # CI/CD pipeline definitions
-├── dags/                    # Airflow DAG definitions
-│   ├── etl/
-│   │   ├── data_quality.py           # Data quality checks (SQL-based)
-│   │   ├── ingest_bronze_to_silver.py # Bronze → Silver + dimension population
-│   │   ├── silver_to_gold.py         # Silver → Gold (Star Schema)
-│   │   ├── generate_sample_data.py    # Auto data generation
-│   │   └── remediation.py             # Auto-fix quarantined records
-│   └── utils/
-│       ├── minio_hook.py              # MinIO operations
-│       ├── postgres_hook.py           # PostgreSQL operations
-│       └── duckdb_utils.py           # DuckDB validation
-├── data/                     # Data storage (local)
-├── docs/                     # Documentation
-│   ├── architecture.md       # Architecture diagrams
-│   └── dashboard_queries.sql # All dashboard SQL queries
-├── notes/                    # User guides
-│   └── METABASE_SETUP_GUIDE.md # Metabase dashboard creation guide
-├── scripts/                  # Utility scripts
-│   ├── data_generator/       # Parquet data generator
-│   ├── postgres_init/       # Database initialization
-│   ├── utils/              # Email, hooks utilities
-│   └── setup_metabase.py   # Metabase setup script
-├── tests/                   # Unit & Integration tests
-│   ├── test_dags.py
-│   ├── test_data_generator.py
-│   ├── test_remediation.py
-│   ├── test_integration.py
-│   └── conftest.py
-├── docker-compose.yml       # All services definition
-├── Dockerfile              # Airflow custom image
-├── requirements.txt        # Python dependencies
-├── pytest.ini              # Pytest configuration
-├── .env                   # Environment variables
-└── README.md
+                       ┌──────────────────────────────────┐
+                       │          pending                  │
+                       │  (initial state on insert)        │
+                       └──────┬──────────────┬─────────────┘
+                              │              │
+                   validation passes    validation fails
+                              │              │
+                              v              v
+                     ┌────────────┐   ┌─────────────┐
+                     │ remediated │   │  rejected    │
+                     │ (in silver)│   │ (unfixable)  │
+                     └────────────┘   └─────────────┘
+                              │
+                    batch replay fails
+                    retry_count incremented
+                              │
+                    retry_count >= max_retries
+                              │
+                              v
+                     ┌────────────────┐
+                     │  dead_letter    │
+                     │ (needs manual   │
+                     │  investigation) │
+                     └────────────────┘
 ```
 
-## Data Flow & Pipelines
+---
+
+## CI/CD Pipeline
 
 ```mermaid
-flowchart TD
-    A[Data Generator] -->|Parquet Files| B[MinIO Bronze]
-    
-    B -->|Every 6hrs| C[ingest_bronze_to_silver]
-    
-    C -->|DuckDB Validation| D{Valid?}
-    D -->|Yes| E[PostgreSQL Silver]
-    D -->|No| F[Quarantine]
-    
-    E -->|Populate| G[silver.sales]
-    E -->|Extract| H[silver.customers]
-    E -->|Extract| I[silver.products]
-    
-    G -->|Quality Check| J[data_quality_checks]
-    H -->|Quality Check| J
-    I -->|Quality Check| J
-    
-    J -->|Generate PDF| K[Email Report]
-    J -->|Drift Detected| L[Alert]
-    
-    F -->|Manual/Auto| M[remediation_workflow]
-    M -->|Fix & Replay| E
-    
-    G -->|6hrs| N[silver_to_gold]
-    N -->|Aggregations| O[Gold Tables]
-    
-    O --> P[Metabase Dashboards]
+flowchart LR
+    Push["Push / PR to master"] --> Lint["Lint & Type Check<br/>ruff, mypy"]
+    Push --> Unit["Unit Tests<br/>pytest + coverage"]
+    Push --> Security["Security Scan<br/>bandit, pip-audit"]
+    Lint & Unit & Security --> Build["Build & Push<br/>Docker → GHCR"]
 ```
 
-### DAGs & Scheduling
+| Job | Tools | Description |
+|-----|-------|-------------|
+| Lint & Type Check | ruff check, ruff format, mypy | Linting, formatting, type checking |
+| Unit Tests | pytest, pytest-cov | DAG imports, generator, task logic |
+| Security Scan | bandit, pip-audit | Code vulnerability + dependency audit |
+| Build & Push | Docker Buildx | Build image, push to GHCR (master only) |
 
-| DAG | Schedule | Description |
-|-----|----------|-------------|
-| `generate_sample_data` | 6am, 12pm, 6pm | Generates 1000 rows to MinIO |
-| `ingest_bronze_to_silver` | Every 6 hours | Bronze → Silver with validation + dimension population |
-| `data_quality_checks` | Daily 6am | SQL-based quality checks on all Silver tables |
-| `silver_to_gold` | After quality | Builds Star Schema (dimensions + facts) |
-| `remediation_workflow` | Manual | Fix and replay quarantined records |
+Workflow features: `workflow_dispatch` for manual triggers, concurrency groups to cancel stale runs, pip caching, JUnit XML test output.
 
-### Data Quality Features
+---
 
-- **SQL-Based Validation**: No external dependencies
-- **Quarantine Pattern Validation**: Checks for NULL values in quarantined records
-- **Profiling**: Row counts and uniqueness for all Silver tables
-- **Drift Detection**: Monitors data volume changes (>10% triggers alert)
-- **PDF Reports**: Generated and attached to email alerts
+## Metabase Dashboards
 
-### Remediation Features
+Seven pre-configured dashboards connect to the Gold layer:
 
-- **Automatic Validation**: Checks required fields and data types
-- **Auto-Rejection**: Invalid records marked as reviewed
-- **Replay**: Fixed records re-inserted to Silver
-- **Statistics**: Full tracking of remediated vs rejected records
+| Dashboard | Key Metrics |
+|-----------|-----------|
+| Main Dashboard | Unified KPIs across all domains |
+| Executive Summary | Revenue, transactions, customer count |
+| Sales Overview | Daily trends, payment methods, weekend vs weekday |
+| Product Analytics | Product revenue, category performance |
+| Customer Analytics | Segments, lifetime value, tier distribution |
+| Store Performance | Revenue by location, top stores |
+| Data Quality | Quarantine trends, error types, quality score |
 
-## Database Schema
+**Setup:** Open http://localhost:3000, connect to PostgreSQL (`host: postgres`, `port: 5432`, `db: airflow`, `user: airflow`, `pass: airflow`). See `docs/dashboard_queries.sql` for all 40+ queries.
 
-### Silver Layer
-
-**Fact Table: `silver.sales`**
-| Column | Type | Description |
-|--------|------|-------------|
-| sale_id | SERIAL | Primary key |
-| transaction_id | VARCHAR(50) | Unique transaction ID |
-| sale_date | DATE | Date of sale |
-| customer_id | VARCHAR(50) | FK to customers |
-| product_id | VARCHAR(50) | FK to products |
-| quantity | INTEGER | Units sold |
-| net_amount | DECIMAL | Revenue after discount |
-| ... | ... | Other sales fields |
-
-**Dimension Table: `silver.customers`**
-| Column | Type | Description |
-|--------|------|-------------|
-| customer_id | VARCHAR(50) | Primary key |
-| customer_name | VARCHAR(100) | Full name |
-| first_purchase_date | DATE | First transaction |
-| total_purchases | INTEGER | Transaction count |
-| total_revenue | DECIMAL | Lifetime value |
-| customer_segment | VARCHAR(20) | Bronze/Silver/Gold/Platinum |
-
-**Dimension Table: `silver.products`**
-| Column | Type | Description |
-|--------|------|-------------|
-| product_id | VARCHAR(50) | Primary key |
-| product_name | VARCHAR(100) | Product name |
-| category | VARCHAR(50) | Product category |
-| sub_category | VARCHAR(50) | Product sub-category |
-| min/max/avg_unit_price | DECIMAL | Price statistics |
-| total_quantity_sold | INTEGER | Units sold |
-| total_revenue | DECIMAL | Total revenue |
-
-### Quarantine Layer
-
-**Table: `quarantine.sales_failed`**
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL | Primary key |
-| payload | JSONB | Original record data |
-| error_reason | VARCHAR(500) | Why it failed validation |
-| source_file | VARCHAR(255) | Source file name |
-| failed_at | TIMESTAMP | When it failed |
-| replayed | BOOLEAN | Has been remediated |
-| replayed_at | TIMESTAMP | When it was remediated |
-| corrected_by | VARCHAR(50) | Who fixed it |
-
-### Gold Layer
-
-| Table | Primary Key | Description |
-|-------|-------------|-------------|
-| daily_sales | sale_date | Daily aggregated metrics |
-| product_performance | product_id | Product-level analytics |
-| customer_analytics | customer_id | Customer behavior analysis |
-| store_performance | store_location | Store-level metrics |
-| category_insights | category | Category aggregates |
-
-## Running the Pipeline
-
-```bash
-# Generate and upload data to MinIO (or wait for scheduled run)
-docker compose exec airflow-worker python scripts/data_generator/generator.py
-
-# Trigger DAGs via Airflow UI at http://localhost:8080
-# Or via CLI:
-docker compose exec airflow-worker airflow dags trigger generate_sample_data
-docker compose exec airflow-worker airflow dags trigger ingest_bronze_to_silver
-docker compose exec airflow-worker airflow dags trigger data_quality_checks
-docker compose exec airflow-worker airflow dags trigger silver_to_gold
-docker compose exec airflow-worker airflow dags trigger remediation_workflow
-
-# Verify data
-docker compose exec postgres psql -U airflow -d airflow -c "SELECT COUNT(*) FROM silver.sales"
-docker compose exec postgres psql -U airflow -d airflow -c "SELECT COUNT(*) FROM silver.customers"
-docker compose exec postgres psql -U airflow -d airflow -c "SELECT COUNT(*) FROM silver.products"
-```
+---
 
 ## Testing
 
 ```bash
-# Run unit tests (in Docker)
-docker exec airflow-worker python /opt/airflow/scripts/run_tests.py
+# Run all tests
+docker compose exec airflow-worker pytest tests/ -v
 
-# Run pytest directly
-docker exec airflow-worker pytest tests/ -v
+# Run specific suite
+docker compose exec airflow-worker pytest tests/test_remediation.py -v
 
-# Run specific test file
-docker exec airflow-worker pytest tests/test_remediation.py -v
+# Verify data counts
+docker compose exec postgres psql -U airflow -d airflow -c "
+  SELECT 'silver.sales' AS tbl, COUNT(*) FROM silver.sales
+  UNION ALL SELECT 'silver.customers', COUNT(*) FROM silver.customers
+  UNION ALL SELECT 'silver.products', COUNT(*) FROM silver.products
+  UNION ALL SELECT 'quarantine.sales_failed', COUNT(*) FROM quarantine.sales_failed
+  UNION ALL SELECT 'gold.daily_sales', COUNT(*) FROM gold.daily_sales;
+"
 ```
 
-### Test Coverage
+---
 
-- **Unit Tests**: Data generator, DAG imports, task logic
-- **Integration Tests**: PostgreSQL, MinIO connectivity
-- **E2E Tests**: Full pipeline validation
+## Configuration Reference
 
-## CI/CD Pipeline
+### Environment Variables (`.env`)
 
-The project includes GitHub Actions workflows for:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_USER` | `airflow` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | `airflow` | PostgreSQL password |
+| `MINIO_ROOT_USER` | `minio` | MinIO access key |
+| `MINIO_ROOT_PASSWORD` | `minio123` | MinIO secret key |
+| `GRAFANA_PORT` | `3001` | Grafana host port |
+| `AIRFLOW_UID` | `50000` | Airflow container user ID |
 
-```mermaid
-flowchart LR
-    A[Push/PR] --> B{Build & Test}
-    B -->|Lint| C[flake8, black, mypy]
-    B -->|Unit| D[pytest]
-    B -->|Security| E[safety, bandit]
-    C --> F[Build Docker]
-    D --> F
-    E --> F
-    F --> G[Integration Tests]
-    G --> H[E2E Tests]
-    H --> I[Notify]
-```
+### Airflow Variables
 
-### Pipeline Jobs
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `alert_email` | `daniel.doe@a2sv.org` | Alert recipient |
+| `remediation_batch_size` | `1000` | Records per remediation batch |
+| `remediation_max_retries` | `3` | Max retries before dead-letter |
 
-| Job | Description |
-|-----|-------------|
-| Lint & Type Check | flake8, black, mypy |
-| Unit Tests | pytest with coverage |
-| Build Docker | Builds & pushes to GHCR |
-| Integration Tests | PostgreSQL, MinIO connectivity |
-| E2E Tests | Full stack, DAG imports, data generator |
-| Security Scan | safety, bandit |
+### Monitoring Ports
 
-## Metabase Dashboards
+| Port | Protocol | Service |
+|------|----------|---------|
+| 9125 | UDP | StatsD ingest (Airflow -> statsd-exporter) |
+| 9102 | HTTP | statsd-exporter metrics (Prometheus scrape) |
+| 9090 | HTTP | Prometheus UI and API |
+| 9187 | HTTP | postgres-exporter metrics |
+| 9121 | HTTP | redis-exporter metrics |
+| 3001 | HTTP | Grafana UI |
 
-The platform includes pre-configured dashboards for data visualization:
-
-### Available Dashboards
-
-| Dashboard | ID | Description | Source Tables |
-|-----------|-----|-------------|---------------|
-| Main Dashboard | 8 | Unified view with KPIs and charts | All gold tables |
-| Executive Summary | 3 | High-level KPIs | gold.daily_sales |
-| Sales Overview | 2 | Combined sales metrics | gold tables |
-| Product Analytics | 4 | Product & category performance | gold.product_performance, gold.category_insights |
-| Customer Analytics | 5 | Customer segments, LTV | gold.customer_analytics |
-| Store Performance | 6 | Store metrics by location | gold.store_performance |
-| Data Quality | 7 | Quality metrics, quarantine trends | quarantine.sales_failed |
-
-### Accessing Dashboards
-
-- **URL**: http://localhost:3000
-- **Login**: agudeydaniel8@gmail.com / metabase123
-
-### Quick Navigation
-
-| Dashboard | Direct URL |
-|-----------|------------|
-| Main Dashboard | http://localhost:3000/dashboard/8-main-dashboard |
-| Executive Summary | http://localhost:3000/dashboard/3-executive-summary |
-| Product Analytics | http://localhost:3000/dashboard/4-product-analytics |
-| Customer Analytics | http://localhost:3000/dashboard/5-customer-analytics |
-| Store Performance | http://localhost:3000/dashboard/6-store-performance |
-| Data Quality | http://localhost:3000/dashboard/7-data-quality |
-
-### Data Quality Dashboard Features
-
-The Data Quality Dashboard includes:
-
-- **KPIs**: Quarantine Records, Quality Score (88.67%), Total Records Processed, Pending Remediation
-- **Charts**: Error Type Distribution (bar), Failed Records Trend (line), Records by Source (pie)
-- **Table**: Recent Failed Records with error details
-
-### Connecting Metabase
-
-1. Open http://localhost:3000
-2. Add a new database:
-   - **Database type**: PostgreSQL
-   - **Host**: postgres
-   - **Port**: 5432
-   - **Database name**: airflow
-   - **Username**: airflow
-   - **Password**: airflow
-
-### SQL Queries Documentation
-
-All dashboard queries are documented in `docs/dashboard_queries.sql`:
-- 40+ SQL queries categorized by dashboard
-- Schema reference for all tables
-- Additional insight queries for deeper analysis
-
-### Creating Custom Dashboards
-
-See `notes/METABASE_SETUP_GUIDE.md` for:
-- How to create questions (step-by-step)
-- Understanding collections
-- Creating tabbed dashboards
-- Adding filters
-- Example queries
-
-## Documentation
-
-| File | Description |
-|------|-------------|
-| `README.md` | This file - overview and quick start |
-| `docs/architecture.md` | Architecture diagrams and system design |
-| `docs/dashboard_queries.sql` | All SQL queries for Metabase dashboards |
-| `notes/METABASE_SETUP_GUIDE.md` | Guide to creating Metabase dashboards |
+---
 
 ## Contributing
 
@@ -475,6 +657,8 @@ See `notes/METABASE_SETUP_GUIDE.md` for:
 4. Push to the branch: `git push origin feature/my-feature`
 5. Open a Pull Request
 
+---
+
 ## License
 
-This project is for educational purposes as part of the Amalitech DEM012 CI/CD module.
+This project is for educational purposes as part of the Amalitech DEM012 CI/CD and Workflow Automation module.

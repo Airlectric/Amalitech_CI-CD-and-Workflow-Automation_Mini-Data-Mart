@@ -124,9 +124,10 @@ class PostgresLayerHook(PostgresHook):
         self.execute_query(query, (file_path, dataset_name, status, record_count, checksum, error_message))
 
     def get_processed_files(self, dataset: str) -> List[str]:
+        """Return files in any terminal state so they are not re-read."""
         query = """
             SELECT file_path FROM metadata.ingestion_metadata
-            WHERE dataset_name = %s AND status = 'PROCESSED'
+            WHERE dataset_name = %s AND status IN ('PROCESSED', 'SCHEMA_DRIFT', 'FAILED')
         """
         result = self.execute_query(query, (dataset,))
         if result[1]:

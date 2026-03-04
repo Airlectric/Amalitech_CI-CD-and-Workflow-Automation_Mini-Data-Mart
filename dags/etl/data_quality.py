@@ -3,9 +3,6 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
 import logging
-import sys
-
-sys.path.insert(0, "/opt/airflow/dags")
 
 from utils.email_utils import send_data_quality_alert
 
@@ -118,23 +115,6 @@ with DAG(
         pg_hook = PostgresLayerHook()
 
         logger.info("Detecting drift against historical baselines")
-
-        # Ensure baseline table exists
-        pg_hook.execute_query("""
-            CREATE TABLE IF NOT EXISTS metadata.quality_baselines (
-                id SERIAL PRIMARY KEY,
-                table_name VARCHAR(100),
-                metric_name VARCHAR(100),
-                metric_value DECIMAL(15,2),
-                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Create index if not exists
-        pg_hook.execute_query("""
-            CREATE INDEX IF NOT EXISTS idx_quality_baselines_lookup
-            ON metadata.quality_baselines (table_name, metric_name, recorded_at)
-        """)
 
         tables = ["sales"]  # Only check incoming data (fact table) for drift, not dimensions (rebuilt from sales)
         drift_results = {}
@@ -553,8 +533,10 @@ with DAG(
 
         q_result = pg_hook.execute_query("""
             SELECT COUNT(*) as total,
-                   COUNT(CASE WHEN replayed = FALSE THEN 1 END) as pending,
-                   COUNT(CASE WHEN replayed = TRUE THEN 1 END) as replayed
+                   COUNT(CASE WHEN remediation_status = 'pending' THEN 1 END) as pending,
+                   COUNT(CASE WHEN remediation_status = 'remediated' THEN 1 END) as remediated,
+                   COUNT(CASE WHEN remediation_status = 'rejected' THEN 1 END) as rejected,
+                   COUNT(CASE WHEN remediation_status = 'dead_letter' THEN 1 END) as dead_letter
             FROM quarantine.sales_failed
         """)
 
@@ -563,20 +545,24 @@ with DAG(
             if isinstance(row, dict):
                 total = row.get("total", 0)
                 pending = row.get("pending", 0)
-                replayed = row.get("replayed", 0)
+                remediated = row.get("remediated", 0)
+                rejected = row.get("rejected", 0)
+                dead_letter = row.get("dead_letter", 0)
             else:
-                total, pending, replayed = row if len(row) == 3 else (row[0] if row else 0, 0, 0)
+                total, pending, remediated, rejected, dead_letter = row if len(row) == 5 else (row[0] if row else 0, 0, 0, 0, 0)
         else:
-            total = pending = replayed = 0
+            total = pending = remediated = rejected = dead_letter = 0
 
         quarantine_stats = {
             "stats": {
                 "total_quarantined": total,
                 "pending": pending,
-                "replayed": replayed,
+                "remediated": remediated,
+                "rejected": rejected,
+                "dead_letter": dead_letter,
             },
             "pending": pending,
-            "replayed": replayed,
+            "remediated": remediated,
         }
 
         has_quarantine_issues = pending > 0

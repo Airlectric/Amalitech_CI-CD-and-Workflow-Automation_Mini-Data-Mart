@@ -8,7 +8,7 @@ from datetime import datetime
 
 POSTGRES_CONN = {
     "host": "localhost",
-    "port": 5432,
+    "port": 5433,
     "dbname": "airflow",
     "user": "airflow",
     "password": "airflow",
