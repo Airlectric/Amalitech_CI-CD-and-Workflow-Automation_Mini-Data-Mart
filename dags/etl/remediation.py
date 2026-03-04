@@ -8,22 +8,10 @@ from airflow.decorators import task
 from airflow.models import Variable
 import logging
 import sys
-import importlib.util
 
-def _import_email_utils():
-    spec = importlib.util.spec_from_file_location(
-        "email_utils",
-        "/opt/airflow/scripts/utils/email_utils.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-email_utils = _import_email_utils()
-send_remediation_alert = email_utils.send_remediation_alert
-
-sys.path.insert(0, "/opt/airflow/scripts")
 sys.path.insert(0, "/opt/airflow/dags")
+
+from utils.email_utils import send_remediation_alert
 
 logger = logging.getLogger(__name__)
 

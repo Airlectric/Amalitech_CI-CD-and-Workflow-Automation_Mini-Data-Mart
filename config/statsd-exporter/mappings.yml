@@ -1,0 +1,87 @@
+mappings:
+  # DAG run duration
+  - match: "airflow.dagrun.duration.*.*"
+    name: "airflow_dagrun_duration_seconds"
+    labels:
+      dag_id: "$1"
+      state: "$2"
+    match_type: glob
+    timer_type: histogram
+
+  # Task duration
+  - match: "airflow.dag.*.*.duration"
+    name: "airflow_task_duration_seconds"
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+    match_type: glob
+    timer_type: histogram
+
+  # Task instance finish count
+  - match: "airflow.ti.finish.*.*.*"
+    name: "airflow_ti_finish_total"
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+      state: "$3"
+    match_type: glob
+
+  # Scheduler heartbeat
+  - match: "airflow.scheduler.heartbeat"
+    name: "airflow_scheduler_heartbeat"
+    labels: {}
+    match_type: glob
+
+  # Scheduler loop duration
+  - match: "airflow.scheduler.scheduler_loop_duration"
+    name: "airflow_scheduler_loop_duration_seconds"
+    labels: {}
+    match_type: glob
+    timer_type: histogram
+
+  # Executor slots
+  - match: "airflow.executor.open_slots"
+    name: "airflow_executor_slots"
+    labels:
+      state: "open"
+    match_type: glob
+
+  - match: "airflow.executor.queued_slots"
+    name: "airflow_executor_slots"
+    labels:
+      state: "queued"
+    match_type: glob
+
+  - match: "airflow.executor.running_slots"
+    name: "airflow_executor_slots"
+    labels:
+      state: "running"
+    match_type: glob
+
+  # Pool slots
+  - match: "airflow.pool.open_slots.*"
+    name: "airflow_pool_slots"
+    labels:
+      pool: "$1"
+      state: "open"
+    match_type: glob
+
+  - match: "airflow.pool.queued_slots.*"
+    name: "airflow_pool_slots"
+    labels:
+      pool: "$1"
+      state: "queued"
+    match_type: glob
+
+  - match: "airflow.pool.running_slots.*"
+    name: "airflow_pool_slots"
+    labels:
+      pool: "$1"
+      state: "running"
+    match_type: glob
+
+  # Catch-all for unmatched metrics
+  - match: "."
+    match_type: regex
+    name: "airflow_${1}"
+    action: drop

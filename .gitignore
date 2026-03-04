@@ -12,6 +12,8 @@ docker-volumes/
 postgres-data/
 minio-data/
 airflow-logs/
+grafana-data/
+prometheus-data/
 
 # ========================
 # OS / IDE
@@ -46,3 +48,4 @@ logs/
 # Notes (internal only)
 # ========================
 notes/
+.claude

@@ -5,25 +5,12 @@ import uuid
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 import sys
-import importlib.util
-
-def _import_email_utils():
-    spec = importlib.util.spec_from_file_location(
-        "email_utils", 
-        "/opt/airflow/scripts/utils/email_utils.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-email_utils = _import_email_utils()
-send_ingestion_alert = email_utils.send_ingestion_alert
-
-sys.path.insert(0, "/opt/airflow/scripts")
 sys.path.insert(0, "/opt/airflow/dags")
 
+from utils.email_utils import send_ingestion_alert
 from utils.minio_hook import MinIOHook
 from utils.postgres_hook import PostgresLayerHook
 from utils.duckdb_utils import DuckDBValidator, create_validator
@@ -64,7 +51,7 @@ def get_dataset_spec(dataset: str) -> dict:
 def check_schema_drift(df_columns: List[str], expected_columns: List[str]) -> dict:
     """
     Check for schema drift between incoming data and expected schema.
-    
+
     Returns dict with:
     - has_drift: bool - True if schema mismatch detected
     - missing_columns: List[str] - columns expected but not in data
@@ -73,18 +60,18 @@ def check_schema_drift(df_columns: List[str], expected_columns: List[str]) -> di
     """
     actual_set = set(df_columns)
     expected_set = set(expected_columns)
-    
+
     missing_columns = list(expected_set - actual_set)
     extra_columns = list(actual_set - expected_set)
-    
+
     has_drift = len(missing_columns) > 0 or len(extra_columns) > 0
-    
+
     drift_details = ""
     if missing_columns:
         drift_details += f"Missing columns: {', '.join(missing_columns)}. "
     if extra_columns:
         drift_details += f"Extra columns: {', '.join(extra_columns)}."
-    
+
     return {
         "has_drift": has_drift,
         "missing_columns": missing_columns,
@@ -129,17 +116,17 @@ with DAG(
 
         minio_hook = MinIOHook(bucket_name=BRONZE_BUCKET)
         pg_hook = PostgresLayerHook()
-        
+
         # Record start of run in audit table
         pg_hook.execute_query(f"""
             INSERT INTO {AUDIT_SCHEMA}.ingestion_runs (ingestion_run_id, started_at, status)
             VALUES ('{run_id}', NOW(), 'RUNNING')
         """)
-        
+
         duckdb_validator = create_validator()
 
         files = minio_hook.list_files(prefix="", suffix=".parquet")
-        
+
         # Track files scanned
         files_scanned = []
         total_rows_read = 0
@@ -163,50 +150,50 @@ with DAG(
                 pg_hook.update_metadata(file_key, "sales", "PROCESSING", 0)
 
                 logger.info(f"Reading {file_key} with DuckDB...")
-                
+
                 df = duckdb_validator.read_parquet_from_minio(
                     bucket=BRONZE_BUCKET,
                     key_pattern=file_key
                 )
-                
+
                 if df.empty:
                     logger.warning(f"No data read from {file_key}")
                     pg_hook.update_metadata(file_key, "sales", "FAILED", 0, error_message="No data found")
                     continue
-                
+
                 logger.info(f"Read {len(df)} rows from {file_key}")
                 total_rows_read += len(df)
 
                 spec = get_dataset_spec("sales")
                 expected_columns = spec.get("expected_columns", [])
-                
+
                 # Schema Drift Detection - Strict Mode
                 schema_drift = check_schema_drift(list(df.columns), expected_columns)
-                
+
                 if schema_drift["has_drift"]:
                     drift_msg = schema_drift["drift_details"]
                     logger.error(f"SCHEMA DRIFT DETECTED in {file_key}: {drift_msg}")
-                    
+
                     # Update metadata with SCHEMA_DRIFT status
                     pg_hook.update_metadata(
-                        file_key, 
-                        "sales", 
-                        "SCHEMA_DRIFT", 
-                        0, 
+                        file_key,
+                        "sales",
+                        "SCHEMA_DRIFT",
+                        0,
                         error_message=f"Schema drift: {drift_msg}"
                     )
-                    
+
                     # Track for alerting
                     errors.append(f"SCHEMA_DRIFT: {file_key} - {drift_msg}")
-                    
+
                     # Skip this file entirely - don't process any rows
                     logger.warning(f"Skipping file {file_key} due to schema drift. Update schema to process.")
                     continue
-                
+
                 # If schema is valid, proceed with row-level validation
                 schema_valid = True
                 validation_result = {}
-                
+
                 try:
                     validation_result = duckdb_validator.run_full_validation(df, spec)
                     schema_valid = validation_result.get("schema_valid", True)
@@ -217,15 +204,15 @@ with DAG(
 
                 # Row-level validation - tag each row with error_reason
                 df["_validation_errors"] = None
-                
+
                 for idx, row in df.iterrows():
                     errors_list = []
-                    
+
                     # Check required columns for nulls
                     for col in spec.get("required_columns", []):
                         if pd.isna(row.get(col)) or row.get(col) is None:
                             errors_list.append(f"null:{col}")
-                    
+
                     # Check value ranges
                     for col, range_spec in spec.get("value_ranges", {}).items():
                         val = row.get(col)
@@ -234,7 +221,7 @@ with DAG(
                             max_val = range_spec.get("max", float('inf'))
                             if val < min_val or val > max_val:
                                 errors_list.append(f"range:{col}")
-                    
+
                     if errors_list:
                         df.at[idx, "_validation_errors"] = ";".join(errors_list)
 
@@ -253,11 +240,11 @@ with DAG(
                     good_rows_clean["ingest_date"] = datetime.now().date()
 
                     pg_hook.upsert_dataframe(
-                        good_rows_clean, 
-                        "sales", 
+                        good_rows_clean,
+                        "sales",
                         schema=SILVER_SCHEMA,
                         conflict_columns=["transaction_id"],
-                        update_columns=["sale_date", "sale_hour", "customer_id", "customer_name", "product_id", 
+                        update_columns=["sale_date", "sale_hour", "customer_id", "customer_name", "product_id",
                                        "product_name", "category", "sub_category", "quantity", "unit_price",
                                        "discount_percentage", "discount_amount", "gross_amount", "net_amount",
                                        "profit_margin", "payment_method", "payment_category", "store_location",
@@ -277,7 +264,7 @@ with DAG(
                             "error_reason": row["_validation_errors"],
                             "source_file": file_key
                         })
-                    
+
                     pg_hook.insert_quarantine(
                         quarantine_records,
                         "sales_failed",
@@ -329,153 +316,10 @@ with DAG(
             "errors": errors
         }
 
-    @task
-    def populate_customers():
-        """Extract unique customers from bronze sales and populate silver.customers"""
-        import pandas as pd
-        import logging
-        
-        logger = logging.getLogger(__name__)
-        logger.info("Populating silver.customers from bronze sales")
-        
-        pg_hook = PostgresLayerHook()
-        duckdb_validator = create_validator()
-        
-        try:
-            all_customers = []
-            
-            for file_key in duckdb_validator.list_parquet_files("bronze"):
-                if not file_key.startswith("sales/"):
-                    continue
-                    
-                try:
-                    df = duckdb_validator.read_parquet_from_minio("bronze", file_key)
-                    
-                    if df.empty:
-                        continue
-                    
-                    if "customer_id" not in df.columns:
-                        continue
-                    
-                    customer_cols = ["customer_id", "customer_name", "region", "store_location"]
-                    existing_cols = [c for c in customer_cols if c in df.columns]
-                    
-                    customers = df[existing_cols].drop_duplicates(subset=["customer_id"])
-                    all_customers.append(customers)
-                        
-                except Exception as e:
-                    logger.warning(f"Error reading {file_key}: {e}")
-            
-            if all_customers:
-                combined = pd.concat(all_customers, ignore_index=True)
-                combined = combined.drop_duplicates(subset=["customer_id"])
-                combined = combined.dropna(subset=["customer_id"])
-                
-                inserted = 0
-                for _, row in combined.iterrows():
-                    try:
-                        pg_hook.execute_query("""
-                            INSERT INTO silver.customers (customer_id, customer_name, created_at)
-                            VALUES (%s, %s, NOW())
-                            ON CONFLICT (customer_id) DO UPDATE SET
-                                customer_name = EXCLUDED.customer_name
-                        """, parameters=(
-                            row.get("customer_id"),
-                            row.get("name", "")
-                        ))
-                        inserted += 1
-                    except Exception as e:
-                        logger.warning(f"Error inserting customer {row.get('customer_id')}: {e}")
-                
-                logger.info(f"Populated {inserted} customers in silver.customers")
-                return {"customers_added": inserted, "status": "success"}
-            else:
-                logger.info("No customers found to populate")
-                return {"customers_added": 0, "status": "no_data"}
-                
-        except Exception as e:
-            logger.error(f"Failed to populate customers: {e}")
-            return {"customers_added": 0, "status": "error", "error": str(e)}
-        finally:
-            duckdb_validator.close()
+    trigger_silver_to_gold = TriggerDagRunOperator(
+        task_id="trigger_silver_to_gold",
+        trigger_dag_id="silver_to_gold",
+        wait_for_downstream=False,
+    )
 
-    @task
-    def populate_products():
-        """Extract unique products from bronze sales and populate silver.products"""
-        import pandas as pd
-        import logging
-        
-        logger = logging.getLogger(__name__)
-        logger.info("Populating silver.products from bronze sales")
-        
-        pg_hook = PostgresLayerHook()
-        duckdb_validator = create_validator()
-        
-        try:
-            all_products = []
-            
-            for file_key in duckdb_validator.list_parquet_files("bronze"):
-                if not file_key.startswith("sales/"):
-                    continue
-                    
-                try:
-                    df = duckdb_validator.read_parquet_from_minio("bronze", file_key)
-                    
-                    if df.empty:
-                        continue
-                    
-                    if "product_id" not in df.columns:
-                        continue
-                    
-                    product_cols = ["product_id", "product_name", "category", "sub_category"]
-                    existing_cols = [c for c in product_cols if c in df.columns]
-                    
-                    products = df[existing_cols].drop_duplicates(subset=["product_id"])
-                    products = products.rename(columns={
-                        "product_name": "product_name",
-                    })
-                    all_products.append(products)
-                        
-                except Exception as e:
-                    logger.warning(f"Error reading {file_key}: {e}")
-            
-            if all_products:
-                combined = pd.concat(all_products, ignore_index=True)
-                combined = combined.drop_duplicates(subset=["product_id"])
-                combined = combined.dropna(subset=["product_id"])
-                
-                inserted = 0
-                for _, row in combined.iterrows():
-                    try:
-                        pg_hook.execute_query("""
-                            INSERT INTO silver.products (product_id, product_name, category, sub_category, created_at)
-                            VALUES (%s, %s, %s, %s, NOW())
-                            ON CONFLICT (product_id) DO UPDATE SET
-                                product_name = EXCLUDED.product_name,
-                                category = EXCLUDED.category,
-                                sub_category = EXCLUDED.sub_category
-                        """, parameters=(
-                            row.get("product_id"),
-                            row.get("product_name", ""),
-                            row.get("category", ""),
-                            row.get("sub_category", "")
-                        ))
-                        inserted += 1
-                    except Exception as e:
-                        logger.warning(f"Error inserting product {row.get('product_id')}: {e}")
-                
-                logger.info(f"Populated {inserted} products in silver.products")
-                return {"products_added": inserted, "status": "success"}
-            else:
-                logger.info("No products found to populate")
-                return {"products_added": 0, "status": "no_data"}
-                
-        except Exception as e:
-            logger.error(f"Failed to populate products: {e}")
-            return {"products_added": 0, "status": "error", "error": str(e)}
-        finally:
-            duckdb_validator.close()
-
-    result = discover_and_ingest()
-    customers_result = populate_customers()
-    products_result = populate_products()
+    discover_and_ingest() >> trigger_silver_to_gold

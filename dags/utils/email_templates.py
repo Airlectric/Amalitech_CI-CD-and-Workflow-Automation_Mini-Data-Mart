@@ -6,7 +6,7 @@ QUALITY_FAILURE_EMAIL = """
 <html>
 <body style="font-family: Arial, sans-serif;">
     <h2 style="color: #c53030;">⚠️ Data Quality Check Failed</h2>
-    
+
     <table style="border-collapse: collapse; width: 100%; margin: 20px 0;">
         <tr style="background: #fed7d7;">
             <th style="padding: 10px; border: 1px solid #e53e3e; text-align: left;">Metric</th>
@@ -29,7 +29,7 @@ QUALITY_FAILURE_EMAIL = """
             <td style="padding: 10px; border: 1px solid #e53e3e;">{pass_rate}%</td>
         </tr>
     </table>
-    
+
     <h3 style="color: #744210;">Failed Checks Details (with Source Files):</h3>
     <table style="border-collapse: collapse; width: 100%; margin: 20px 0;">
         <tr style="background: #feebc8;">
@@ -41,25 +41,25 @@ QUALITY_FAILURE_EMAIL = """
         </tr>
         {failure_rows}
     </table>
-    
+
     <h3 style="color: #744210;">Recently Ingested Source Files:</h3>
     <ul style="background: #f7fafc; padding: 15px; border-radius: 5px;">
         {source_list}
     </ul>
-    
+
     <h3 style="color: #744210;">Action Required:</h3>
     <ol style="background: #f7fafc; padding: 15px 30px; border-radius: 5px;">
         <li>Identify the source file(s) with bad data from the table above</li>
         <li>Investigate and fix the source data in MinIO Bronze layer</li>
         <li>Re-run the ingestion pipeline after fixing</li>
     </ol>
-    
+
     <p style="color: #718096; margin-top: 20px;">
         <strong>DAG:</strong> data_quality_checks<br>
         <strong>Date:</strong> {timestamp}<br>
         <strong>Run ID:</strong> {run_id}
     </p>
-    
+
     <p style="color: #718096;">
         Please review the quality report in Airflow UI for more details.
     </p>
@@ -92,14 +92,14 @@ def format_failure_email(
     run_id: str
 ) -> str:
     """Format the failure email with all data"""
-    
+
     failure_rows = ""
     for f in failed_details:
         table = f.get('table', 'N/A')
         column = f.get('column', 'N/A')
         check = f.get('check', 'N/A')
         details = f.get('details', {})
-        
+
         key = f"{table}.{column}"
         sources = failed_sources.get(key, [])
         if sources:
@@ -109,7 +109,7 @@ def format_failure_email(
             ])
         else:
             source_str = "N/A"
-        
+
         if check == 'not_null':
             issue = f"Null count: {details.get('null_count', 'N/A')}"
         elif check == 'uniqueness':
@@ -118,7 +118,7 @@ def format_failure_email(
             issue = f"Issues: {len(details.get('issues', []))}"
         else:
             issue = str(details)
-        
+
         failure_rows += SIMPLE_FAILURE_ROW.format(
             table=table,
             column=column,
@@ -126,20 +126,20 @@ def format_failure_email(
             issue=issue,
             source=source_str
         )
-    
+
     if not failure_rows:
         failure_rows = "<tr><td colspan='5'>No specific details available</td></tr>"
-    
+
     source_list = ""
     for sf in source_files[:5]:
         source_list += SIMPLE_SOURCE_ITEM.format(
             file_path=sf.get('file_path', 'N/A'),
             ingest_date=sf.get('ingest_date', 'N/A')
         )
-    
+
     if not source_list:
         source_list = "<li>No source files found</li>"
-    
+
     return QUALITY_FAILURE_EMAIL.format(
         total_checks=total_checks,
         passed=passed,
