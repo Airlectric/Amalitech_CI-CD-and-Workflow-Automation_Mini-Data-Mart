@@ -1,0 +1,62 @@
+name: Trigger DAG and Wait
+description: Trigger an Airflow DAG and poll the database until it succeeds or fails.
+
+inputs:
+  dag-id:
+    description: The DAG ID to trigger
+    required: true
+  timeout:
+    description: Max poll iterations (each ~10s)
+    required: false
+    default: "60"
+
+outputs:
+  state:
+    description: Final DAG run state
+    value: ${{ steps.run.outputs.state }}
+
+runs:
+  using: composite
+  steps:
+    - name: Trigger and wait for DAG
+      id: run
+      shell: bash
+      run: |
+        DAG_ID="${{ inputs.dag-id }}"
+        TIMEOUT="${{ inputs.timeout }}"
+
+        echo "--- Triggering $DAG_ID ---"
+        docker compose exec -T airflow-scheduler airflow dags trigger "$DAG_ID"
+
+        echo "--- Waiting for $DAG_ID ---"
+        for i in $(seq 1 "$TIMEOUT"); do
+          STATE=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c \
+            "SELECT state FROM dag_run WHERE dag_id = '$DAG_ID' ORDER BY start_date DESC LIMIT 1;" | tr -d ' ')
+
+          if [ "$STATE" = "success" ]; then
+            echo "$DAG_ID: SUCCESS"
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$STATE" = "failed" ]; then
+            echo "$DAG_ID: FAILED"
+            echo "=== Task instance states ==="
+            docker compose exec -T postgres psql -U airflow -d airflow -c \
+              "SELECT task_id, state, start_date, end_date FROM task_instance WHERE dag_id = '$DAG_ID' ORDER BY start_date DESC LIMIT 10;"
+            docker compose logs airflow-worker --tail=30
+            docker compose logs airflow-scheduler --tail=20
+            echo "state=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "  $DAG_ID: state=$STATE ($i/$TIMEOUT)"
+          sleep 10
+        done
+
+        echo "ERROR: $DAG_ID timed out (last state: $STATE)"
+        echo "=== Task instance states ==="
+        docker compose exec -T postgres psql -U airflow -d airflow -c \
+          "SELECT task_id, state, start_date, end_date FROM task_instance WHERE dag_id = '$DAG_ID' ORDER BY start_date DESC LIMIT 10;"
+        docker compose logs airflow-scheduler --tail=30
+        docker compose logs airflow-worker --tail=30
+        echo "state=timeout" >> "$GITHUB_OUTPUT"
+        exit 1

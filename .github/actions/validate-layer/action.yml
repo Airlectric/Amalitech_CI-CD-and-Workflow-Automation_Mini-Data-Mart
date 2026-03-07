@@ -1,0 +1,36 @@
+name: Validate Database Layer
+description: Check that one or more database tables have data.
+
+inputs:
+  tables:
+    description: Space-separated list of schema.table names to validate
+    required: true
+  db-user:
+    description: PostgreSQL user
+    required: false
+    default: airflow
+  db-name:
+    description: PostgreSQL database name
+    required: false
+    default: airflow
+
+runs:
+  using: composite
+  steps:
+    - name: Validate tables have data
+      shell: bash
+      run: |
+        FAILED=0
+        for table in ${{ inputs.tables }}; do
+          COUNT=$(docker compose exec -T postgres psql -U ${{ inputs.db-user }} -d ${{ inputs.db-name }} -t -c \
+            "SELECT COUNT(*) FROM $table;" | tr -d ' ')
+          echo "$table: $COUNT rows"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: No data in $table"
+            FAILED=1
+          fi
+        done
+        if [ "$FAILED" -eq 1 ]; then
+          exit 1
+        fi
+        echo "All tables validated"

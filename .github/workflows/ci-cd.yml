@@ -22,381 +22,248 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # lint-and-type-check:
-  #   name: Lint & Type Check
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: "3.11"
-  #         cache: pip
-  #
-  #     - name: Install tools
-  #       run: |
-  #         python -m pip install --upgrade pip
-  #         pip install ruff mypy types-requests types-PyYAML
-  #
-  #     - name: Lint with ruff
-  #       run: ruff check dags/ scripts/ tests/
-  #
-  #     - name: Check formatting with ruff
-  #       run: ruff format --check dags/ scripts/ tests/
-  #
-  #     - name: Type check with mypy
-  #       run: mypy dags/ scripts/ --ignore-missing-imports
-  #       continue-on-error: true
-
-  # unit-tests:
-  #   name: Unit Tests
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: "3.11"
-  #         cache: pip
-  #
-  #     - name: Install dependencies
-  #       run: |
-  #         python -m pip install --upgrade pip
-  #         pip install -r requirements.txt
-  #         pip install pytest pytest-cov pytest-mock
-  #
-  #     - name: Run unit tests
-  #       run: pytest tests/ -m "not integration" --junitxml=test-results.xml --cov=dags --cov=scripts --cov-report=xml
-  #
-  #     - name: Upload test results
-  #       uses: actions/upload-artifact@v4
-  #       if: always()
-  #       with:
-  #         name: test-results
-  #         path: |
-  #           test-results.xml
-  #           coverage.xml
-
-  # security-scan:
-  #   name: Security Scan
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: "3.11"
-  #         cache: pip
-  #
-  #     - name: Install tools
-  #       run: |
-  #         python -m pip install --upgrade pip
-  #         pip install "bandit[toml]" pip-audit
-  #         pip install -r requirements.txt
-  #
-  #     - name: Run bandit security scan
-  #       run: bandit -r dags/ scripts/ -c pyproject.toml -ll -f json -o bandit-report.json
-  #
-  #     - name: Run pip-audit
-  #       run: pip-audit -r requirements.txt
-  #       continue-on-error: true
-  #
-  #     - name: Upload security report
-  #       uses: actions/upload-artifact@v4
-  #       if: always()
-  #       with:
-  #         name: security-report
-  #         path: bandit-report.json
-
-  # build-and-push:
-  #   name: Build & Push Docker Image
-  #   runs-on: ubuntu-latest
-  #   needs: [lint-and-type-check, unit-tests, security-scan]
-  #   if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-  #   permissions:
-  #     contents: read
-  #     packages: write
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Set up Docker Buildx
-  #       uses: docker/setup-buildx-action@v3
-  #
-  #     - name: Login to GitHub Container Registry
-  #       uses: docker/login-action@v3
-  #       with:
-  #         registry: ghcr.io
-  #         username: ${{ github.actor }}
-  #         password: ${{ secrets.GITHUB_TOKEN }}
-  #
-  #     - name: Extract metadata
-  #       id: meta
-  #       uses: docker/metadata-action@v5
-  #       with:
-  #         images: ghcr.io/${{ github.repository }}/airflow
-  #         tags: |
-  #           type=ref,event=branch
-  #           type=sha,prefix={{branch}}-
-  #           type=raw,value=latest,enable={{is_default_branch}}
-  #
-  #     - name: Build and push Docker image
-  #       uses: docker/build-push-action@v5
-  #       with:
-  #         context: .
-  #         push: true
-  #         tags: ${{ steps.meta.outputs.tags }}
-  #         labels: ${{ steps.meta.outputs.labels }}
-  #         cache-from: type=gha
-  #         cache-to: type=gha,mode=max
-
-  # deploy-test:
-  #   name: Deploy to Test Environment
-  #   runs-on: ubuntu-latest
-  #   needs: [build-and-push]
-  #   if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Create .env file
-  #       run: echo "${{ secrets.ENV_FILE }}" > .env
-  #
-  #     - name: Fix mount permissions
-  #       run: |
-  #         mkdir -p data/data_docs logs
-  #         chmod -R 777 data logs
-  #
-  #     - name: Start services
-  #       run: docker compose up -d --build
-  #       timeout-minutes: 10
-  #
-  #     - name: Wait for services to be healthy
-  #       run: |
-  #         echo "Waiting for PostgreSQL..."
-  #         for i in $(seq 1 30); do
-  #           if docker compose exec -T postgres pg_isready -U airflow -d airflow 2>/dev/null; then
-  #             echo "PostgreSQL is ready"
-  #             break
-  #           fi
-  #           sleep 5
-  #         done
-  #
-  #         echo "Waiting for Airflow API..."
-  #         AIRFLOW_READY=false
-  #         for i in $(seq 1 60); do
-  #           if curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null 2>&1; then
-  #             echo "Airflow API is ready"
-  #             AIRFLOW_READY=true
-  #             break
-  #           fi
-  #           echo "Waiting for Airflow... ($i/60)"
-  #           sleep 5
-  #         done
-  #         if [ "$AIRFLOW_READY" = "false" ]; then
-  #           echo "ERROR: Airflow API did not become healthy"
-  #           echo "=== airflow-api-server logs ==="
-  #           docker compose logs airflow-api-server --tail=50
-  #           echo "=== airflow-init logs ==="
-  #           docker compose logs airflow-init --tail=30
-  #           exit 1
-  #         fi
-  #
-  #     - name: Verify all containers are running
-  #       run: |
-  #         echo "=== Container Status ==="
-  #         docker compose ps
-  #         RUNNING=$(docker compose ps --format json | grep -c '"running"' || true)
-  #         echo "Running containers: $RUNNING"
-  #         if [ "$RUNNING" -lt 10 ]; then
-  #           echo "ERROR: Expected at least 10 running containers"
-  #           docker compose logs --tail=50
-  #           exit 1
-  #         fi
-  #
-  #     - name: Verify database schemas exist
-  #       run: |
-  #         docker compose exec -T postgres psql -U airflow -d airflow -c "
-  #           SELECT schema_name FROM information_schema.schemata
-  #           WHERE schema_name IN ('silver', 'gold', 'metadata', 'quarantine', 'audit')
-  #           ORDER BY schema_name;
-  #         "
-  #         SCHEMA_COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "
-  #           SELECT COUNT(*) FROM information_schema.schemata
-  #           WHERE schema_name IN ('silver', 'gold', 'metadata', 'quarantine', 'audit');
-  #         " | tr -d ' ')
-  #         if [ "$SCHEMA_COUNT" -ne 5 ]; then
-  #           echo "ERROR: Expected 5 schemas, found $SCHEMA_COUNT"
-  #           exit 1
-  #         fi
-  #         echo "All 5 schemas verified"
-  #
-  #     - name: Tear down test environment
-  #       if: always()
-  #       run: docker compose down
-
-  data-flow-validation:
-    name: Data Flow Validation
+  lint-and-type-check:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
-    # needs: [build-and-push]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy types-requests types-PyYAML
+
+      - name: Lint with ruff
+        run: ruff check dags/ scripts/ tests/
+
+      - name: Check formatting with ruff
+        run: ruff format --check dags/ scripts/ tests/
+
+      - name: Type check with mypy
+        run: mypy dags/ scripts/ --ignore-missing-imports
+        continue-on-error: true
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-mock
+
+      - name: Run unit tests
+        run: pytest tests/ -m "not integration" --junitxml=test-results.xml --cov=dags --cov=scripts --cov-report=xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            test-results.xml
+            coverage.xml
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install "bandit[toml]" pip-audit
+          pip install -r requirements.txt
+
+      - name: Run bandit security scan
+        run: bandit -r dags/ scripts/ -c pyproject.toml -ll -f json -o bandit-report.json
+
+      - name: Run pip-audit
+        run: pip-audit -r requirements.txt
+        continue-on-error: true
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-report
+          path: bandit-report.json
+
+      - name: Extract SMTP credentials from ENV_FILE
+        if: always()
+        run: |
+          echo "${{ secrets.ENV_FILE }}" > /tmp/.env.ci
+          echo "SMTP_USER=$(grep '^AIRFLOW__SMTP__SMTP_USER=' /tmp/.env.ci | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "SMTP_PASSWORD=$(grep '^AIRFLOW__SMTP__SMTP_PASSWORD=' /tmp/.env.ci | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          rm /tmp/.env.ci
+
+      - name: Email security report
+        if: always()
+        uses: ./.github/actions/email-report
+        with:
+          report-path: bandit-report.json
+          smtp-user: ${{ env.SMTP_USER }}
+          smtp-password: ${{ env.SMTP_PASSWORD }}
+
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint-and-type-check, unit-tests, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/airflow
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-test:
+    name: Deploy to Test Environment
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create .env file
-        run: echo "${{ secrets.ENV_FILE }}" > .env
+      - name: Setup Airflow environment
+        uses: ./.github/actions/setup-airflow
+        with:
+          env-file-content: ${{ secrets.ENV_FILE }}
 
-      - name: Fix mount permissions
-        run: |
-          mkdir -p data/data_docs logs
-          chmod -R 777 data logs
-
-      - name: Start services
-        run: docker compose up -d --build
-        timeout-minutes: 10
-
-      - name: Wait for Airflow to be ready
-        run: |
-          AIRFLOW_READY=false
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null 2>&1; then
-              echo "Airflow API is ready"
-              AIRFLOW_READY=true
-              break
-            fi
-            echo "Waiting for Airflow... ($i/60)"
-            sleep 5
-          done
-          if [ "$AIRFLOW_READY" = "false" ]; then
-            echo "ERROR: Airflow API did not become healthy"
-            echo "=== airflow-api-server logs ==="
-            docker compose logs airflow-api-server --tail=50
-            echo "=== airflow-init logs ==="
-            docker compose logs airflow-init --tail=30
-            exit 1
-          fi
-
-      - name: Wait for DAGs to be parsed
-        run: |
-          echo "Waiting for DAGs to be registered..."
-          for i in $(seq 1 30); do
-            COUNT=$(docker compose exec -T airflow-api-server airflow dags list -o plain 2>/dev/null | grep -c "^" || echo "0")
-            echo "  DAGs found: $COUNT ($i/30)"
-            if [ "$COUNT" -ge 4 ]; then
-              echo "All DAGs registered"
-              break
-            fi
-            sleep 10
-          done
-
-      - name: Check scheduler and worker health
+      - name: Verify all containers are running
         run: |
           echo "=== Container Status ==="
           docker compose ps
+          RUNNING=$(docker compose ps --format json | grep -c '"running"' || true)
+          echo "Running containers: $RUNNING"
+          if [ "$RUNNING" -lt 10 ]; then
+            echo "ERROR: Expected at least 10 running containers"
+            docker compose logs --tail=50
+            exit 1
+          fi
 
-          echo ""
-          echo "=== Scheduler logs (last 20 lines) ==="
-          docker compose logs airflow-scheduler --tail=20
-
-          echo ""
-          echo "=== Worker logs (last 20 lines) ==="
-          docker compose logs airflow-worker --tail=20
-
-      - name: Unpause all DAGs via database
+      - name: Verify database schemas exist
         run: |
-          echo "Unpausing all DAGs directly in the metadata database..."
-          docker compose exec -T postgres psql -U airflow -d airflow -c "UPDATE dag SET is_paused = false;"
-          echo "Verifying unpause:"
-          docker compose exec -T postgres psql -U airflow -d airflow -c "SELECT dag_id, is_paused FROM dag ORDER BY dag_id;"
+          docker compose exec -T postgres psql -U airflow -d airflow -c "
+            SELECT schema_name FROM information_schema.schemata
+            WHERE schema_name IN ('silver', 'gold', 'metadata', 'quarantine', 'audit')
+            ORDER BY schema_name;
+          "
+          SCHEMA_COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "
+            SELECT COUNT(*) FROM information_schema.schemata
+            WHERE schema_name IN ('silver', 'gold', 'metadata', 'quarantine', 'audit');
+          " | tr -d ' ')
+          if [ "$SCHEMA_COUNT" -ne 5 ]; then
+            echo "ERROR: Expected 5 schemas, found $SCHEMA_COUNT"
+            exit 1
+          fi
+          echo "All 5 schemas verified"
 
-      - name: Trigger and validate DAGs
+      - name: Tear down test environment
+        if: always()
+        run: docker compose down
+
+  data-flow-validation:
+    name: Data Flow Validation
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Airflow environment
+        uses: ./.github/actions/setup-airflow
+        with:
+          env-file-content: ${{ secrets.ENV_FILE }}
+
+      - name: "Step 1: Generate sample data"
+        uses: ./.github/actions/trigger-dag
+        with:
+          dag-id: generate_sample_data
+
+      - name: "Validate: MinIO Bronze layer"
         run: |
-          get_dag_run_state() {
-            local dag_id=$1
-            docker compose exec -T postgres psql -U airflow -d airflow -t -c \
-              "SELECT state FROM dag_run WHERE dag_id = '$dag_id' ORDER BY start_date DESC LIMIT 1;" | tr -d ' '
-          }
-
-          trigger_and_wait() {
-            local dag_id=$1
-            echo "--- Triggering $dag_id ---"
-            docker compose exec -T airflow-scheduler airflow dags trigger "$dag_id"
-            echo "--- Waiting for $dag_id ---"
-            for i in $(seq 1 60); do
-              STATE=$(get_dag_run_state "$dag_id")
-              if [ "$STATE" = "success" ]; then
-                echo "$dag_id: SUCCESS"
-                return 0
-              elif [ "$STATE" = "failed" ]; then
-                echo "$dag_id: FAILED"
-                echo "=== Task instance states ==="
-                docker compose exec -T postgres psql -U airflow -d airflow -c \
-                  "SELECT task_id, state, start_date, end_date FROM task_instance WHERE dag_id = '$dag_id' ORDER BY start_date DESC LIMIT 10;"
-                docker compose logs airflow-worker --tail=30
-                docker compose logs airflow-scheduler --tail=20
-                return 1
-              fi
-              echo "  $dag_id: state=$STATE ($i/60)"
-              sleep 10
-            done
-            echo "ERROR: $dag_id timed out (last state: $STATE)"
-            echo "=== Task instance states ==="
-            docker compose exec -T postgres psql -U airflow -d airflow -c \
-              "SELECT task_id, state, start_date, end_date FROM task_instance WHERE dag_id = '$dag_id' ORDER BY start_date DESC LIMIT 10;"
-            echo "=== Scheduler logs ==="
-            docker compose logs airflow-scheduler --tail=30
-            echo "=== Worker logs ==="
-            docker compose logs airflow-worker --tail=30
-            return 1
-          }
-
-          echo "=== Step 1: Generate sample data ==="
-          trigger_and_wait generate_sample_data
-
-          echo ""
-          echo "=== Validate: MinIO Bronze layer ==="
           OBJECTS=$(docker compose exec -T minio mc ls local/bronze/ 2>/dev/null | wc -l || echo "0")
           echo "MinIO bronze objects: $OBJECTS"
 
-          echo ""
-          echo "=== Step 2: Ingest bronze to silver ==="
-          trigger_and_wait ingest_bronze_to_silver
+      - name: "Step 2: Ingest bronze to silver"
+        uses: ./.github/actions/trigger-dag
+        with:
+          dag-id: ingest_bronze_to_silver
 
-          echo ""
-          echo "=== Validate: Silver layer ==="
-          SILVER_COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "SELECT COUNT(*) FROM silver.sales;" | tr -d ' ')
-          echo "silver.sales row count: $SILVER_COUNT"
-          if [ "$SILVER_COUNT" -eq 0 ]; then
-            echo "ERROR: No data in silver.sales after ingestion"
-            exit 1
-          fi
-          echo "Silver layer validated: $SILVER_COUNT rows"
+      - name: "Validate: Silver layer"
+        uses: ./.github/actions/validate-layer
+        with:
+          tables: silver.sales
 
-          echo ""
-          echo "=== Step 3: Silver to gold aggregation ==="
-          trigger_and_wait silver_to_gold
+      - name: "Step 3: Silver to gold aggregation"
+        uses: ./.github/actions/trigger-dag
+        with:
+          dag-id: silver_to_gold
 
-      - name: "Validate: Gold layer has aggregated data"
-        run: |
-          echo "=== Gold Layer Validation ==="
-          for table in daily_sales product_performance customer_analytics store_performance category_insights; do
-            COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "SELECT COUNT(*) FROM gold.$table;" | tr -d ' ')
-            echo "gold.$table: $COUNT rows"
-            if [ "$COUNT" -eq 0 ]; then
-              echo "ERROR: No data in gold.$table"
-              exit 1
-            fi
-          done
-          echo "All gold tables validated"
+      - name: "Validate: Gold layer"
+        uses: ./.github/actions/validate-layer
+        with:
+          tables: gold.daily_sales gold.product_performance gold.customer_analytics gold.store_performance gold.category_insights
 
-      - name: "Validate: Metabase can query dashboards"
+      - name: "Validate: Metabase health"
         run: |
           echo "Checking Metabase is accessible..."
           for i in $(seq 1 12); do

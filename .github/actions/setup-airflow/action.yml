@@ -1,0 +1,83 @@
+name: Setup Airflow Environment
+description: Start Docker Compose services, wait for Airflow health, wait for DAGs, and unpause them.
+
+inputs:
+  env-file-content:
+    description: Content of the .env file (from secrets)
+    required: true
+  min-dags:
+    description: Minimum number of DAGs expected
+    required: false
+    default: "4"
+
+runs:
+  using: composite
+  steps:
+    - name: Create .env file
+      shell: bash
+      run: echo "${{ inputs.env-file-content }}" > .env
+
+    - name: Fix mount permissions
+      shell: bash
+      run: |
+        mkdir -p data/data_docs logs
+        chmod -R 777 data logs
+
+    - name: Start services
+      shell: bash
+      run: docker compose up -d --build
+      timeout-minutes: 10
+
+    - name: Wait for Airflow to be ready
+      shell: bash
+      run: |
+        AIRFLOW_READY=false
+        for i in $(seq 1 60); do
+          if curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null 2>&1; then
+            echo "Airflow API is ready"
+            AIRFLOW_READY=true
+            break
+          fi
+          echo "Waiting for Airflow... ($i/60)"
+          sleep 5
+        done
+        if [ "$AIRFLOW_READY" = "false" ]; then
+          echo "ERROR: Airflow API did not become healthy"
+          docker compose logs airflow-api-server --tail=50
+          docker compose logs airflow-init --tail=30
+          exit 1
+        fi
+
+    - name: Wait for DAGs to be parsed
+      shell: bash
+      run: |
+        echo "Waiting for DAGs to be registered..."
+        for i in $(seq 1 30); do
+          COUNT=$(docker compose exec -T airflow-api-server airflow dags list -o plain 2>/dev/null | grep -c "^" || echo "0")
+          echo "  DAGs found: $COUNT ($i/30)"
+          if [ "$COUNT" -ge ${{ inputs.min-dags }} ]; then
+            echo "All DAGs registered"
+            break
+          fi
+          sleep 10
+        done
+
+    - name: Check scheduler and worker health
+      shell: bash
+      run: |
+        echo "=== Container Status ==="
+        docker compose ps
+        echo ""
+        echo "=== Scheduler logs (last 20 lines) ==="
+        docker compose logs airflow-scheduler --tail=20
+        echo ""
+        echo "=== Worker logs (last 20 lines) ==="
+        docker compose logs airflow-worker --tail=20
+
+    - name: Unpause all DAGs via database
+      shell: bash
+      run: |
+        echo "Unpausing all DAGs directly in the metadata database..."
+        docker compose exec -T postgres psql -U airflow -d airflow -c "UPDATE dag SET is_paused = false;"
+        echo "Verifying unpause:"
+        docker compose exec -T postgres psql -U airflow -d airflow -c "SELECT dag_id, is_paused FROM dag ORDER BY dag_id;"

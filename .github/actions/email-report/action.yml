@@ -1,0 +1,28 @@
+name: Email Security Report
+description: Send the bandit security scan report via Gmail SMTP.
+
+inputs:
+  report-path:
+    description: Path to the bandit JSON report
+    required: true
+  smtp-user:
+    description: Gmail address for SMTP login
+    required: true
+  smtp-password:
+    description: Gmail app password
+    required: true
+  recipient:
+    description: Email recipient (defaults to smtp-user)
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Send security report email
+      shell: bash
+      env:
+        REPORT_PATH: ${{ inputs.report-path }}
+        SMTP_USER: ${{ inputs.smtp-user }}
+        SMTP_PASSWORD: ${{ inputs.smtp-password }}
+        RECIPIENT: ${{ inputs.recipient || inputs.smtp-user }}
+      run: python .github/scripts/send_security_report.py
