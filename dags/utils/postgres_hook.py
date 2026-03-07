@@ -159,7 +159,9 @@ class PostgresLayerHook(PostgresHook):
             cursor.close()
             conn.close()
 
-    def insert_quarantine(self, records: list[dict], table: str, schema: str = "quarantine", run_id: str | None = None) -> int:
+    def insert_quarantine(
+        self, records: list[dict], table: str, schema: str = "quarantine", run_id: str | None = None
+    ) -> int:
         """Insert bad records into quarantine table"""
         if not records:
             return 0
