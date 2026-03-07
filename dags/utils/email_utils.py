@@ -106,6 +106,7 @@ def send_alert_email(
     password: str | None = None,
     smtp_host: str | None = None,
     smtp_port: int | None = None,
+    attachment_path: str | None = None,
 ) -> dict[str, Any]:
     """
     Send an HTML email alert with retry mechanism
@@ -118,6 +119,7 @@ def send_alert_email(
         password: App password for Gmail SMTP
         smtp_host: SMTP server hostname
         smtp_port: SMTP server port
+        attachment_path: Optional file path to attach to the email
 
     Returns:
         Dict with status and any error message
@@ -131,13 +133,29 @@ def send_alert_email(
         smtp_port = smtp_port or config["port"]
 
     try:
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed")
         msg["Subject"] = subject
         msg["From"] = sender
         msg["To"] = recipient
 
         part = MIMEText(html_body, "html")
         msg.attach(part)
+
+        # Attach file if provided
+        if attachment_path and os.path.exists(attachment_path):
+            from email import encoders
+            from email.mime.base import MIMEBase
+
+            with open(attachment_path, "rb") as f:
+                attachment = MIMEBase("application", "octet-stream")
+                attachment.set_payload(f.read())
+            encoders.encode_base64(attachment)
+            attachment.add_header(
+                "Content-Disposition",
+                f"attachment; filename={os.path.basename(attachment_path)}",
+            )
+            msg.attach(attachment)
+            logger.info(f"Attached file: {attachment_path}")
 
         with smtplib.SMTP(smtp_host, smtp_port) as server:
             server.starttls()
@@ -164,6 +182,7 @@ def send_throttled_alert(
     recipient: str,
     severity: AlertSeverity = AlertSeverity.WARNING,
     alert_type: str = "generic",
+    attachment_path: str | None = None,
 ) -> dict[str, Any]:
     """Send alert with severity-based throttling"""
     alert_key = f"{alert_type}:{recipient}:{subject[:50]}"
@@ -180,7 +199,7 @@ def send_throttled_alert(
     }
     full_subject = f"{severity_prefixes[severity]} {subject}"
 
-    result = send_alert_email_with_retry(full_subject, html_body, recipient)
+    result = send_alert_email_with_retry(full_subject, html_body, recipient, attachment_path=attachment_path)
 
     if result.get("status") == "sent":
         _alert_cache[alert_key] = datetime.now()
@@ -449,21 +468,7 @@ def send_data_quality_alert(
     </html>
     """
 
-    # Add attachment if provided
-    kwargs = {}
-    if attachment_path and os.path.exists(attachment_path):
-        from email import encoders
-        from email.mime.base import MIMEBase
-
-        with open(attachment_path, "rb") as f:
-            attachment = MIMEBase("application", "octet-stream")
-            attachment.set_payload(f.read())
-        encoders.encode_base64(attachment)
-        attachment.add_header("Content-Disposition", f"attachment; filename={os.path.basename(attachment_path)}")
-        # Note: Need to modify send_alert_email to support attachments
-        kwargs["attachment_path"] = attachment_path
-
-    return send_throttled_alert(subject, html_body, recipient, severity, "data_quality")
+    return send_throttled_alert(subject, html_body, recipient, severity, "data_quality", attachment_path=attachment_path)
 
 
 def send_remediation_alert(

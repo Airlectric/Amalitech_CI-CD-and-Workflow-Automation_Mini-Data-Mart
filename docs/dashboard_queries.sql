@@ -5,14 +5,15 @@
 -- This file contains all SQL queries used across all dashboards
 -- Database: PostgreSQL (airflow)
 -- 
--- Table of Contents:
---   1. Main Dashboard (ID: 8)
---   2. Executive Summary (ID: 3)
---   3. Sales Overview (ID: 2)
---   4. Product Analytics (ID: 4)
---   5. Customer Analytics (ID: 5)
---   6. Store Performance (ID: 6)
---   7. Data Quality (ID: 7)
+-- Dashboard: Single dashboard with tabs
+-- Tabs:
+--   1. Main Dashboard (Overview KPIs + Charts)
+--   2. Executive Summary
+--   3. Sales Overview
+--   4. Product Analytics
+--   5. Customer Analytics
+--   6. Store Performance
+--   7. Data Quality
 -- ============================================================
 
 -- ************************************************************
@@ -59,16 +60,38 @@ FROM quarantine.sales_failed;
 -- -----------------------------------------------------------
 -- 1.7 Daily Sales Trend
 -- -----------------------------------------------------------
-SELECT 
-    sale_date, 
-    total_transactions, 
-    net_revenue 
-FROM gold.daily_sales 
-ORDER BY sale_date DESC 
+SELECT
+    sale_date,
+    total_transactions,
+    net_revenue
+FROM gold.daily_sales
+ORDER BY sale_date DESC
 LIMIT 30;
 
 -- -----------------------------------------------------------
--- 1.8 Product Performance
+-- 1.8 Revenue by Day of Week
+-- -----------------------------------------------------------
+SELECT
+    TO_CHAR(sale_date, 'Day') AS day_of_week,
+    SUM(net_revenue) AS revenue,
+    COUNT(*) AS transactions
+FROM gold.daily_sales
+GROUP BY TO_CHAR(sale_date, 'Day'), EXTRACT(DOW FROM sale_date)
+ORDER BY EXTRACT(DOW FROM sale_date);
+
+-- -----------------------------------------------------------
+-- 1.9 Monthly Revenue Trend
+-- -----------------------------------------------------------
+SELECT
+    TO_CHAR(sale_date, 'YYYY-MM') AS month,
+    SUM(net_revenue) AS revenue,
+    SUM(total_transactions) AS transactions
+FROM gold.daily_sales
+GROUP BY TO_CHAR(sale_date, 'YYYY-MM')
+ORDER BY month;
+
+-- -----------------------------------------------------------
+-- 1.10 Product Performance
 -- -----------------------------------------------------------
 SELECT 
     product_name, 
@@ -80,7 +103,7 @@ ORDER BY total_revenue DESC
 LIMIT 20;
 
 -- -----------------------------------------------------------
--- 1.9 Category Insights
+-- 1.11 Category Insights
 -- -----------------------------------------------------------
 SELECT 
     category, 
@@ -91,7 +114,7 @@ FROM gold.category_insights
 ORDER BY total_revenue DESC;
 
 -- -----------------------------------------------------------
--- 1.10 Store Performance
+-- 1.12 Store Performance
 -- -----------------------------------------------------------
 SELECT 
     store_location, 
@@ -102,7 +125,7 @@ FROM gold.store_performance
 ORDER BY total_revenue DESC;
 
 -- -----------------------------------------------------------
--- 1.11 Customer Analytics
+-- 1.13 Customer Analytics
 -- -----------------------------------------------------------
 SELECT 
     customer_name, 
@@ -178,7 +201,19 @@ ORDER BY sale_date DESC
 LIMIT 30;
 
 -- -----------------------------------------------------------
--- 3.2 Product Performance
+-- 3.2 Daily Sales with Growth Analysis
+-- -----------------------------------------------------------
+SELECT
+    sale_date,
+    net_revenue,
+    LAG(net_revenue) OVER (ORDER BY sale_date) AS prev_revenue,
+    net_revenue - LAG(net_revenue) OVER (ORDER BY sale_date) AS growth
+FROM gold.daily_sales
+ORDER BY sale_date DESC
+LIMIT 30;
+
+-- -----------------------------------------------------------
+-- 3.3 Product Performance
 -- -----------------------------------------------------------
 SELECT 
     product_name, 
@@ -190,7 +225,7 @@ ORDER BY total_revenue DESC
 LIMIT 20;
 
 -- -----------------------------------------------------------
--- 3.3 Category Insights
+-- 3.4 Category Insights
 -- -----------------------------------------------------------
 SELECT 
     category, 
@@ -201,7 +236,7 @@ FROM gold.category_insights
 ORDER BY total_revenue DESC;
 
 -- -----------------------------------------------------------
--- 3.4 Customer Analytics
+-- 3.5 Customer Analytics
 -- -----------------------------------------------------------
 SELECT 
     customer_name, 
@@ -213,7 +248,7 @@ ORDER BY total_revenue DESC
 LIMIT 20;
 
 -- -----------------------------------------------------------
--- 3.5 Store Performance
+-- 3.6 Store Performance
 -- -----------------------------------------------------------
 SELECT 
     store_location, 
@@ -269,7 +304,19 @@ FROM gold.product_performance
 ORDER BY category, total_revenue DESC;
 
 -- -----------------------------------------------------------
--- 4.4 Category Performance Bar Chart
+-- 4.4 Category Performance Detailed
+-- -----------------------------------------------------------
+SELECT
+    category,
+    total_revenue,
+    total_products_sold,
+    average_order_value,
+    number_of_transactions
+FROM gold.category_insights
+ORDER BY total_revenue DESC;
+
+-- -----------------------------------------------------------
+-- 4.5 Category Performance Bar Chart
 -- -----------------------------------------------------------
 SELECT 
     category, 
@@ -394,7 +441,20 @@ FROM gold.store_performance
 ORDER BY total_revenue DESC;
 
 -- -----------------------------------------------------------
--- 6.4 Store Metrics Table
+-- 6.4 Store Revenue Detailed
+-- -----------------------------------------------------------
+SELECT
+    store_location,
+    region,
+    total_revenue,
+    total_transactions,
+    total_customers_served,
+    top_selling_category
+FROM gold.store_performance
+ORDER BY total_revenue DESC;
+
+-- -----------------------------------------------------------
+-- 6.5 Store Metrics Table
 -- -----------------------------------------------------------
 SELECT 
     store_location,
@@ -502,71 +562,6 @@ GROUP BY
         WHEN replayed = TRUE THEN 'Replayed'
         ELSE 'Pending'
     END;
-
-
--- ************************************************************
--- ADDITIONAL INSIGHTS
--- Bonus queries for deeper analysis
--- ************************************************************
-
--- -----------------------------------------------------------
--- Revenue by Day of Week
--- -----------------------------------------------------------
-SELECT 
-    TO_CHAR(sale_date, 'Day') AS day_of_week,
-    SUM(net_revenue) AS revenue,
-    COUNT(*) AS transactions 
-FROM gold.daily_sales 
-GROUP BY TO_CHAR(sale_date, 'Day'), EXTRACT(DOW FROM sale_date) 
-ORDER BY EXTRACT(DOW FROM sale_date);
-
--- -----------------------------------------------------------
--- Monthly Revenue Trend
--- -----------------------------------------------------------
-SELECT 
-    TO_CHAR(sale_date, 'YYYY-MM') AS month,
-    SUM(net_revenue) AS revenue,
-    SUM(total_transactions) AS transactions 
-FROM gold.daily_sales 
-GROUP BY TO_CHAR(sale_date, 'YYYY-MM') 
-ORDER BY month;
-
--- -----------------------------------------------------------
--- Daily Sales with Growth Analysis
--- -----------------------------------------------------------
-SELECT 
-    sale_date, 
-    net_revenue, 
-    LAG(net_revenue) OVER (ORDER BY sale_date) AS prev_revenue,
-    net_revenue - LAG(net_revenue) OVER (ORDER BY sale_date) AS growth 
-FROM gold.daily_sales 
-ORDER BY sale_date DESC 
-LIMIT 30;
-
--- -----------------------------------------------------------
--- Category Performance Detailed
--- -----------------------------------------------------------
-SELECT 
-    category, 
-    total_revenue, 
-    total_products_sold, 
-    average_order_value, 
-    number_of_transactions 
-FROM gold.category_insights 
-ORDER BY total_revenue DESC;
-
--- -----------------------------------------------------------
--- Store Revenue Detailed
--- -----------------------------------------------------------
-SELECT 
-    store_location,
-    region,
-    total_revenue,
-    total_transactions,
-    total_customers_served,
-    top_selling_category
-FROM gold.store_performance 
-ORDER BY total_revenue DESC;
 
 
 -- ************************************************************

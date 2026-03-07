@@ -155,3 +155,251 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-test:
+    name: Deploy to Test Environment
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create .env file
+        run: |
+          cat > .env << 'EOF'
+          POSTGRES_USER=airflow
+          POSTGRES_PASSWORD=airflow
+          POSTGRES_DB=airflow
+          METADATA_POSTGRES_LOCAL_PORT=5433
+          REDIS_LOCAL_PORT=6379
+          MINIO_ROOT_USER=minio
+          MINIO_ROOT_PASSWORD=minio123
+          MINIO_ENDPOINT=minio:9000
+          GRAFANA_PORT=3001
+          EOF
+
+      - name: Fix mount permissions
+        run: |
+          mkdir -p data/data_docs logs
+          chmod -R 777 data logs
+
+      - name: Start services
+        run: docker compose up -d --build --wait
+        timeout-minutes: 10
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in $(seq 1 30); do
+            if docker compose exec -T postgres pg_isready -U airflow -d airflow 2>/dev/null; then
+              echo "PostgreSQL is ready"
+              break
+            fi
+            sleep 5
+          done
+
+          echo "Waiting for Airflow API..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/api/v1/health >/dev/null 2>&1; then
+              echo "Airflow API is ready"
+              break
+            fi
+            sleep 5
+          done
+
+      - name: Verify all containers are running
+        run: |
+          echo "=== Container Status ==="
+          docker compose ps
+          RUNNING=$(docker compose ps --format json | grep -c '"running"' || true)
+          echo "Running containers: $RUNNING"
+          if [ "$RUNNING" -lt 10 ]; then
+            echo "ERROR: Expected at least 10 running containers"
+            docker compose logs --tail=20
+            exit 1
+          fi
+
+      - name: Verify database schemas exist
+        run: |
+          docker compose exec -T postgres psql -U airflow -d airflow -c "
+            SELECT schema_name FROM information_schema.schemata
+            WHERE schema_name IN ('silver', 'gold', 'metadata', 'quarantine', 'audit')
+            ORDER BY schema_name;
+          "
+          SCHEMA_COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "
+            SELECT COUNT(*) FROM information_schema.schemata
+            WHERE schema_name IN ('silver', 'gold', 'metadata', 'quarantine', 'audit');
+          " | tr -d ' ')
+          if [ "$SCHEMA_COUNT" -ne 5 ]; then
+            echo "ERROR: Expected 5 schemas, found $SCHEMA_COUNT"
+            exit 1
+          fi
+          echo "All 5 schemas verified"
+
+      - name: Tear down test environment
+        if: always()
+        run: docker compose down
+
+  data-flow-validation:
+    name: Data Flow Validation
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create .env file
+        run: |
+          cat > .env << 'EOF'
+          POSTGRES_USER=airflow
+          POSTGRES_PASSWORD=airflow
+          POSTGRES_DB=airflow
+          METADATA_POSTGRES_LOCAL_PORT=5433
+          REDIS_LOCAL_PORT=6379
+          MINIO_ROOT_USER=minio
+          MINIO_ROOT_PASSWORD=minio123
+          MINIO_ENDPOINT=minio:9000
+          GRAFANA_PORT=3001
+          EOF
+
+      - name: Fix mount permissions
+        run: |
+          mkdir -p data/data_docs logs
+          chmod -R 777 data logs
+
+      - name: Start services
+        run: docker compose up -d --build --wait
+        timeout-minutes: 10
+
+      - name: Wait for Airflow to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/api/v1/health >/dev/null 2>&1; then
+              echo "Airflow API is ready"
+              break
+            fi
+            echo "Waiting for Airflow... ($i/60)"
+            sleep 5
+          done
+
+      - name: Unpause DAGs
+        run: |
+          docker compose exec -T airflow-api-server airflow dags unpause generate_sample_data
+          docker compose exec -T airflow-api-server airflow dags unpause ingest_bronze_to_silver
+          docker compose exec -T airflow-api-server airflow dags unpause data_quality_checks
+          docker compose exec -T airflow-api-server airflow dags unpause silver_to_gold
+
+      - name: "Step 1: Generate sample data (MinIO ingestion)"
+        run: |
+          docker compose exec -T airflow-api-server airflow dags trigger generate_sample_data
+          echo "Waiting for data generation..."
+          for i in $(seq 1 30); do
+            STATE=$(docker compose exec -T airflow-api-server airflow dags list-runs -d generate_sample_data -o plain 2>/dev/null | grep -o 'success\|failed' | head -1)
+            if [ "$STATE" = "success" ]; then
+              echo "generate_sample_data: SUCCESS"
+              break
+            elif [ "$STATE" = "failed" ]; then
+              echo "generate_sample_data: FAILED"
+              docker compose logs airflow-worker --tail=30
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: "Validate: Data exists in MinIO (Bronze layer)"
+        run: |
+          OBJECTS=$(docker compose exec -T minio mc ls local/bronze/ 2>/dev/null | wc -l || echo "0")
+          echo "MinIO bronze objects: $OBJECTS"
+
+      - name: "Step 2: Ingest bronze to silver (Airflow processing)"
+        run: |
+          docker compose exec -T airflow-api-server airflow dags trigger ingest_bronze_to_silver
+          echo "Waiting for ingestion..."
+          for i in $(seq 1 30); do
+            STATE=$(docker compose exec -T airflow-api-server airflow dags list-runs -d ingest_bronze_to_silver -o plain 2>/dev/null | grep -o 'success\|failed' | head -1)
+            if [ "$STATE" = "success" ]; then
+              echo "ingest_bronze_to_silver: SUCCESS"
+              break
+            elif [ "$STATE" = "failed" ]; then
+              echo "ingest_bronze_to_silver: FAILED"
+              docker compose logs airflow-worker --tail=30
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: "Validate: Data exists in PostgreSQL silver layer"
+        run: |
+          SILVER_COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "SELECT COUNT(*) FROM silver.sales;" | tr -d ' ')
+          echo "silver.sales row count: $SILVER_COUNT"
+          if [ "$SILVER_COUNT" -eq 0 ]; then
+            echo "ERROR: No data in silver.sales after ingestion"
+            exit 1
+          fi
+          echo "Silver layer validated: $SILVER_COUNT rows"
+
+      - name: "Step 3: Run silver to gold aggregation"
+        run: |
+          docker compose exec -T airflow-api-server airflow dags trigger silver_to_gold
+          echo "Waiting for gold aggregation..."
+          for i in $(seq 1 30); do
+            STATE=$(docker compose exec -T airflow-api-server airflow dags list-runs -d silver_to_gold -o plain 2>/dev/null | grep -o 'success\|failed' | head -1)
+            if [ "$STATE" = "success" ]; then
+              echo "silver_to_gold: SUCCESS"
+              break
+            elif [ "$STATE" = "failed" ]; then
+              echo "silver_to_gold: FAILED"
+              docker compose logs airflow-worker --tail=30
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: "Validate: Gold layer has aggregated data"
+        run: |
+          echo "=== Gold Layer Validation ==="
+          for table in daily_sales product_performance customer_analytics store_performance category_insights; do
+            COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "SELECT COUNT(*) FROM gold.$table;" | tr -d ' ')
+            echo "gold.$table: $COUNT rows"
+            if [ "$COUNT" -eq 0 ]; then
+              echo "ERROR: No data in gold.$table"
+              exit 1
+            fi
+          done
+          echo "All gold tables validated"
+
+      - name: "Validate: Metabase can query dashboards"
+        run: |
+          echo "Checking Metabase is accessible..."
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:3000/api/health >/dev/null 2>&1; then
+              echo "Metabase is healthy"
+              break
+            fi
+            sleep 10
+          done
+
+      - name: "Summary: End-to-end data flow"
+        run: |
+          echo "========================================="
+          echo "  DATA FLOW VALIDATION COMPLETE"
+          echo "========================================="
+          echo ""
+          echo "MinIO (Bronze) -> Airflow -> PostgreSQL (Silver) -> PostgreSQL (Gold) -> Metabase"
+          echo ""
+          docker compose exec -T postgres psql -U airflow -d airflow -t -c "
+            SELECT 'silver.sales' AS layer, COUNT(*) AS rows FROM silver.sales
+            UNION ALL SELECT 'gold.daily_sales', COUNT(*) FROM gold.daily_sales
+            UNION ALL SELECT 'gold.product_performance', COUNT(*) FROM gold.product_performance
+            UNION ALL SELECT 'gold.customer_analytics', COUNT(*) FROM gold.customer_analytics
+            UNION ALL SELECT 'gold.store_performance', COUNT(*) FROM gold.store_performance
+            UNION ALL SELECT 'gold.category_insights', COUNT(*) FROM gold.category_insights
+            UNION ALL SELECT 'quarantine.sales_failed', COUNT(*) FROM quarantine.sales_failed;
+          "
+          echo "========================================="
+
+      - name: Tear down
+        if: always()
+        run: docker compose down

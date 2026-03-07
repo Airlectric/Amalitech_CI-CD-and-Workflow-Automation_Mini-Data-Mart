@@ -276,6 +276,70 @@ flowchart TD
 
 ---
 
+## Screenshots
+
+### Airflow DAGs
+![Airflow DAGs](docs/screenshots/airflow_dags.jpg)
+
+### MinIO Bronze Layer
+![MinIO Bronze Bucket](docs/screenshots/minio_bronze_bucket_with_paquet_files.jpg)
+
+### DuckDB API
+![DuckDB API](docs/screenshots/duckdb_api_for_querying_minio_objects.jpg)
+
+### Grafana Dashboards
+
+![Grafana Dashboards List](docs/screenshots/grafana_dashboards_list.jpg)
+
+#### Airflow Metrics
+![Grafana Airflow Metrics](docs/screenshots/grafana_airflow_metrics.jpg)
+
+#### MinIO Metrics
+![Grafana MinIO Metrics](docs/screenshots/grafana_minio_metrics.jpg)
+
+#### PostgreSQL Metrics
+![Grafana PostgreSQL Metrics](docs/screenshots/grafana_postgres_metrics.jpg)
+
+#### Redis & Celery Metrics
+![Grafana Redis Celery Metrics](docs/screenshots/grafana_redis_celery_metrics.jpg)
+
+### Prometheus
+
+![Prometheus Exporters](docs/screenshots/prometheus_list_of_exporters.jpg)
+![Prometheus Targets Health](docs/screenshots/prometheus_targets_health.jpg)
+
+### Metabase Dashboards
+
+![Metabase Questions & Dashboards](docs/screenshots/metabase_list_of_questions_and_viz_dashboards.jpg)
+
+#### Overview
+![Metabase Overview](docs/screenshots/metabase_dashboard_overview.jpg)
+
+#### Executive Summary
+![Metabase Executive Summary](docs/screenshots/metabase_dashboard_exec_summary.jpg)
+
+#### Sales Overview
+![Metabase Sales Overview](docs/screenshots/metabase_dashboard_sales_overview.jpg)
+
+#### Product Analytics
+![Metabase Product Analytics](docs/screenshots/metabase_dashboard_product_overview.jpg)
+
+#### Customer Analytics
+![Metabase Customer Analytics](docs/screenshots/metabase_dashboard_customer_overview.jpg)
+
+#### Store Performance
+![Metabase Store Performance](docs/screenshots/metabase_dashboard_store_performance.jpg)
+
+### Email Alerts
+
+#### Data Quality Report
+![Data Quality Email Report](docs/screenshots/data_quality_email_report.jpg)
+
+#### Schema Drift Alert
+![Schema Drift Alert](docs/screenshots/schema_drift_email_alert_during_ingestion.jpg)
+
+---
+
 ## Monitoring and Observability
 
 ### Metrics Pipeline
@@ -313,6 +377,35 @@ curl -s 'http://localhost:9090/api/v1/query?query=airflow_scheduler_heartbeat'
 # Open Grafana (anonymous access enabled)
 open http://localhost:3001
 ```
+
+### Metabase Dashboards
+
+A pre-configured Metabase dashboard with 7 tabs is auto-provisioned on first startup:
+
+| Tab | Content |
+|-----|---------|
+| **Overview** | 6 KPIs + daily/weekly/monthly trends + top products/customers/stores |
+| **Executive Summary** | High-level KPIs + daily sales trend |
+| **Sales Overview** | Daily sales + growth analysis + breakdowns by product/category/store |
+| **Product Analytics** | Top products + category breakdowns + detailed performance |
+| **Customer Analytics** | Customer overview + tier distribution + full details |
+| **Store Performance** | Store comparisons + revenue by region |
+| **Data Quality** | Quarantine KPIs + error types + failed records trend + remediation status |
+
+**How it works:** On first PostgreSQL startup (empty volume), `scripts/metabase_init/restore_metabase.sh` restores the dashboard backup (`metabase_backup.sql`) into the `metabase` database. Metabase reads from this database on boot.
+
+**Re-exporting dashboards** (after making changes in the UI):
+```bash
+# Export current Metabase state
+docker compose exec postgres pg_dump -U airflow metabase > scripts/metabase_init/metabase_backup.sql
+
+# Commit the updated backup
+git add scripts/metabase_init/metabase_backup.sql
+```
+
+**Access:** http://localhost:3000
+
+All dashboard queries are documented in [`docs/dashboard_queries.sql`](docs/dashboard_queries.sql).
 
 ---
 
@@ -383,7 +476,7 @@ flowchart TD
     Trigger --> Tests
     Trigger --> Security
 
-    subgraph Parallel["Parallel Jobs"]
+    subgraph CI["CI: Parallel Jobs"]
         Lint["Lint & Type Check<br/>ruff check · ruff format · mypy"]
         Tests["Unit Tests<br/>pytest · pytest-cov"]
         Security["Security Scan<br/>bandit · pip-audit"]
@@ -396,10 +489,15 @@ flowchart TD
     Gate -->|Yes + push to master| Build["Build & Push<br/>Docker image → GHCR"]
     Gate -->|PR or failure| Stop["Done"]
 
+    Build --> Deploy["CD: Deploy to Test<br/>docker compose up · schema validation"]
+    Build --> Validate["Data Flow Validation<br/>MinIO → Airflow → PostgreSQL → Metabase"]
+
     style Lint fill:#2563eb,color:#fff
     style Tests fill:#16a34a,color:#fff
     style Security fill:#dc2626,color:#fff
     style Build fill:#7c3aed,color:#fff
+    style Deploy fill:#0891b2,color:#fff
+    style Validate fill:#ca8a04,color:#000
 ```
 
 | Job | Tools | What It Does |
@@ -408,6 +506,8 @@ flowchart TD
 | **Unit Tests** | `pytest`, `pytest-cov` | Runs 51 unit tests covering DAG structure, data generator modes, remediation logic, and task functions |
 | **Security Scan** | `bandit`, `pip-audit` | Scans source code for common vulnerabilities (SQL injection, hardcoded secrets) and checks dependencies for known CVEs |
 | **Build & Push** | Docker Buildx | Builds the Airflow image and pushes to GitHub Container Registry (only on push to `master`, not on PRs) |
+| **Deploy to Test** | `docker compose` | Spins up all services, verifies containers are healthy, validates all 5 database schemas exist |
+| **Data Flow Validation** | Airflow CLI, `psql` | Triggers DAGs in order (generate → ingest → gold), validates data flows from MinIO → Silver → Gold → Metabase |
 
 **Workflow features:** `workflow_dispatch` for manual triggers, concurrency groups to cancel stale runs, pip caching, JUnit XML test output.
 

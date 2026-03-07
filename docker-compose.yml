@@ -8,6 +8,8 @@ services:
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
       - ./scripts/postgres_init/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./scripts/metabase_init/restore_metabase.sh:/docker-entrypoint-initdb.d/restore_metabase.sh:ro
+      - ./scripts/metabase_init/metabase_backup.sql:/docker-entrypoint-initdb.d/metabase/metabase_backup.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
       interval: 5s
@@ -289,7 +291,7 @@ services:
 
   airflow-init:
     image: custom-airflow:local
-    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    user: "0:0"
     depends_on:
       - postgres
       - redis
