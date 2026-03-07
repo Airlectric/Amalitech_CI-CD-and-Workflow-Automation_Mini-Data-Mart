@@ -34,9 +34,13 @@ A production-grade containerized data platform implementing the **Medallion Arch
 
 ## Architecture
 
-### System Overview
+### Core Architecture
 
-![System Overview](https://mermaid.ink/img/pako:eNrFWG1v4jgQ_itWVr3eSaShoUCLdiuF8nJIUChwXe0dp8pJHPA12KztlL7-rvt-v-xsJwECobvV6bap1Dr2ePw8M-OZSZ8Mj_rIqBkHB0-YYFEDTxMCwMQQMzRHE6Mmhy7kclTYmL-GDEM3RFwJ6A1qKaBEtOAchw_xvl9ReIcE9iC4RBEqgNV7AThyf1gAHBJucsRwkOhP1YzwY3K4XVncTwy19pIgCEK69GaQiczhXsTu1ngxT_ZMyMvLwcGETMhqGxjX1fvBAfi0_YBB1xm3-sPe7tKE8MidMriYgUEIRUDZ_I-J8dE970mzgQYUcDX_0XLPJ8afE-JjhjyBKUmOVEjlsWbygIYzdkC7edkcOuNO_3K1EEs22uoAPJ8CzrxPhzMhFrxmWdH9EpPpkUfn1nJhetJYiAhLu4Uni5ZPlySk0LdcBonPTfnL5NSTNjfnyMfQggvozZAJMVNmMbFUc8TvpodgiX0x-3Ronx5a5zGrNiKIQUHZR5dZ5z9XwFUEQyweQE8GDv9FE92lNhr3h067uUVpZcKR1AenSBKU5uv0Qd_9S1oqndY6QfLUGSWPKNcUHM8XIVLg-RFlU0uPEm4LyL5GSOSwihWCLnxAMadRCQxiadDCOqiT4xHx87g5nWGr2_-8j5sTG1UidjSSdGKlNhsWKc8OmSIu3tvlMQoZmW1tmvGSmmOMGLiWPvehAp1xThIL7406DckUdkU5FIYhCsHFDHm3PAN6iLRugd4bdgpEhUIKvQeJJAPGDE-niGVwt2noS7H3Rq1grAMkxol8ScaNcOh_6_KonFd3Rnszw2fI0IxGXDlnQLmYMsR1Ioqr0KtXaIRlgWH59lko5kdLfIs1V50v1NtCM5d2m6vcYVv2mZUe-zW8QSFazCDJSyPxYRtphEOZO8A_fwMv4oLOEdMvC0b9yBPZCFyPVryvPss_EjrICObzTG6e9KLABP0gvusD12xvAigTpp-BrP2-S3QkYwux4x2GOabovdEUPSTgDzKCOspXVfEn4EQ-FtoUgbQBEAx6t_KWKZ-ziACPRmTL669axn7FMurG_SCC-nKvY7oMWlDW5bFu9hQ1G1xjtPxmiRw1h9edi-Zob_1H7A57stRu3ebuMNWWEe-7skm8gy5WWf57QmIkoOCNXJstl0vFm6EF1emSz-jSsk9L5dNjy4XM1D2iyaUCzGWzyvOuvtaugoFJgYzT1DNgdP5f3FWySqeWUoJk_o74DaeBWMq0eBPSKc2BsxbdgdJmMPj_6oV0TgAJ3Fso4uUdUIn5TDOGrgdKduum5MSBQ2D4oJyylQDq3-_pk2qpemxb0mC6ouy542pJX4CqrD185lLI_F3rNiLv9g2NqawDt76b12fLhUYdOIOOPtPxzRn1wOiqu5s-Mrcu-ZP7JdNzOpdg0Bk0u53LZt7nTKOtDR93wxOSdMVqKu4BleakG5STz16IIAGMLvlzUvoyyy70k8V1ncgIZJLkszayOiGpojoE4vZmQpLBanIvx6vfnG5n_EUm42Gz12x04q-oHK5pf6iAyCuG5WfGBg29nmDWh64axAlZDfVeGUohfAABvkf-li2ygiJuiwCLm6LnNbk9VJxLp_tl3LkY5cHXSVkB69UzjlJxs1djv66SsFPvaBPtD4D4Nmb0plNr962mNiy5mstQX81uejGd2_D2plhmQtMxtx75Pfmlu1FO1mWFiwcZWAl4GWRh7cNFo9oq2QWPhpTVPgRBUOCC0VtU-1AqlZKxqS9gzV7cpyoSbImKovpJVRSLxe9SobnEClqtRrWYo2B300bsxVub1ZOL0sVb4asLlSg4q5fP6pU3848btFgHoQSlu9Q4K2S_LqRb2ddFevtFjIIxZdg3aoJFqGDIPnoO1aux-48pHwUwCoX6V8-L3LaA5HdK5-lORqPpzKgFMOTyLVrIvg01MJSVZC0iMyhiF6pVM2rH5XJRKzFqT8a9UbPts6PS2XHZLtuV03L5pFowHoxaSeXouChFT06rxUpRzr4UjEd9qn1UKhZLJ6Vq9bQsBY4rpZd_ASYKQO8?type=png)
+![Core Architecture](docs/architecture/MIni%20Data%20Mart%20-%20Core_Architecture.svg)
+
+### Observability
+
+![Observability](docs/architecture/MIni%20Data%20Mart%20-%20Observerability_Diagram.svg)
 
 ---
 
@@ -316,67 +320,11 @@ open http://localhost:3001
 
 ### Star Schema (ER Diagram)
 
-```mermaid
-erDiagram
-    SILVER_SALES {
-        serial sale_id PK
-        varchar transaction_id UK
-        date sale_date
-        int sale_hour
-        varchar customer_id FK
-        varchar product_id FK
-        int quantity
-        decimal unit_price
-        decimal net_amount
-        timestamp processed_at
-    }
-    SILVER_CUSTOMERS {
-        varchar customer_id PK
-        varchar customer_name
-        date first_purchase_date
-        int total_purchases
-        decimal total_revenue
-        varchar customer_segment
-    }
-    SILVER_PRODUCTS {
-        varchar product_id PK
-        varchar product_name
-        varchar category
-        decimal avg_unit_price
-        int total_quantity_sold
-    }
-    GOLD_DAILY_SALES {
-        date sale_date PK
-        int total_transactions
-        decimal gross_revenue
-        decimal net_revenue
-        int unique_customers
-    }
-    GOLD_PRODUCT_PERFORMANCE {
-        varchar product_id PK
-        decimal total_revenue
-        int number_of_transactions
-    }
-    GOLD_CUSTOMER_ANALYTICS {
-        varchar customer_id PK
-        decimal total_revenue
-        varchar customer_tier
-        varchar favorite_category
-    }
-    GOLD_STORE_PERFORMANCE {
-        varchar store_location PK
-        decimal total_revenue
-        int total_customers_served
-    }
-    GOLD_CATEGORY_INSIGHTS {
-        varchar category PK
-        decimal total_revenue
-        int total_products_sold
-    }
+![ER Diagram](docs/architecture/db_schema_diagrams/MIni%20Data%20Mart%20-%20ER_diagram.svg)
 
-    SILVER_SALES }o--|| SILVER_CUSTOMERS : "customer_id"
-    SILVER_SALES }o--|| SILVER_PRODUCTS : "product_id"
-```
+### Metadata & Audit (ER Diagram)
+
+![Metadata ER Diagram](docs/architecture/db_schema_diagrams/Mini_Mart_Metadata%20ER_Diagrams.svg)
 
 ### Schema Overview
 
@@ -401,51 +349,44 @@ erDiagram
 
 **silver.sales**: sale_id (PK), transaction_id (UK), sale_date, sale_hour, customer_id, customer_name, product_id, product_name, category, sub_category, quantity, unit_price, discount_percentage, discount_amount, gross_amount, net_amount, profit_margin, payment_method, payment_category, store_location, region, is_weekend, is_holiday, ingest_date, source_file, processed_at
 
-**silver.customers**: customer_id (PK), customer_name, first_purchase_date, total_purchases, total_revenue, average_order_value, customer_segment, last_purchase_date, days_since_last_purchase
+**silver.customers**: customer_id (PK), customer_name, first_purchase_date, total_purchases, total_revenue, average_order_value, customer_segment, last_purchase_date, days_since_last_purchase, created_at
 
-**silver.products**: product_id (PK), product_name, category, sub_category, min_unit_price, max_unit_price, avg_unit_price, total_quantity_sold, total_revenue
+**silver.products**: product_id (PK), product_name, category, sub_category, min_unit_price, max_unit_price, avg_unit_price, total_quantity_sold, total_revenue, created_at, updated_at
 
 **quarantine.sales_failed**: id + ingestion_run_id (composite PK), payload (JSONB), error_reason, failed_at, source_file, corrected_by, corrected_at, replayed, replayed_at, remediation_status, retry_count
 
-**gold.daily_sales**: sale_date (PK), total_transactions, total_quantity_sold, gross_revenue, total_discounts, net_revenue, average_order_value, unique_customers, unique_products, top_category
+**gold.daily_sales**: sale_date (PK), total_transactions, total_quantity_sold, gross_revenue, total_discounts, net_revenue, average_order_value, unique_customers, unique_products, top_category, created_at
 
-**gold.product_performance**: product_id (PK), product_name, category, total_quantity_sold, total_revenue, average_unit_price, total_discount_given, number_of_transactions
+**gold.product_performance**: product_id (PK), product_name, category, total_quantity_sold, total_revenue, average_unit_price, total_discount_given, number_of_transactions, average_quantity_per_transaction, created_at
 
-**gold.customer_analytics**: customer_id (PK), customer_name, total_purchases, total_revenue, average_order_value, favorite_category, favorite_payment_method, most_visited_store, customer_tier
+**gold.customer_analytics**: customer_id (PK), customer_name, total_purchases, total_revenue, average_order_value, favorite_category, favorite_payment_method, most_visited_store, customer_tier, created_at
 
-**gold.store_performance**: store_location (PK), region, total_transactions, total_revenue, average_order_value, total_customers_served, top_selling_category
+**gold.store_performance**: store_location (PK), region, total_transactions, total_revenue, average_order_value, total_customers_served, top_selling_category, created_at
 
-**gold.category_insights**: category (PK), total_products_sold, total_revenue, average_discount_percentage, number_of_transactions, average_order_value
+**gold.category_insights**: category (PK), total_products_sold, total_revenue, average_discount_percentage, number_of_transactions, average_order_value, created_at
 
-**metadata.ingestion_metadata**: file_path (PK), dataset_name, checksum, ingest_date, status, record_count, processed_at, airflow_run_id, error_message
+**metadata.ingestion_metadata**: file_path (PK), dataset_name, checksum, ingest_date, status, record_count, processed_at, airflow_run_id, error_message, created_at
+
+**metadata.quality_baselines**: id (PK), table_name, metric_name, metric_value, recorded_at
+
+**audit.ingestion_runs**: ingestion_run_id (PK, UUID), started_at, finished_at, files_scanned (TEXT[]), rows_read, rows_written_silver, rows_quarantined, status, operator
 
 ### Quarantine Record Lifecycle
 
-```
-                       ┌──────────────────────────────────┐
-                       │          pending                  │
-                       │  (initial state on insert)        │
-                       └──────┬──────────────┬─────────────┘
-                              │              │
-                   validation passes    validation fails
-                              │              │
-                              v              v
-                     ┌────────────┐   ┌─────────────┐
-                     │ remediated │   │  rejected    │
-                     │ (in silver)│   │ (unfixable)  │
-                     └────────────┘   └─────────────┘
-                              │
-                    batch replay fails
-                    retry_count incremented
-                              │
-                    retry_count >= max_retries
-                              │
-                              v
-                     ┌────────────────┐
-                     │  dead_letter    │
-                     │ (needs manual   │
-                     │  investigation) │
-                     └────────────────┘
+```mermaid
+flowchart TD
+    A["pending\n(initial state on insert)"]
+    A -->|validation passes| B["remediated\n(replayed into silver)"]
+    A -->|validation fails| C["rejected\n(unfixable)"]
+    B -->|batch replay fails\nretry_count incremented| D{retry_count\n>= max_retries?}
+    D -->|No| A
+    D -->|Yes| E["dead_letter\n(needs manual investigation)"]
+
+    style A fill:#f9c74f,color:#000
+    style B fill:#90be6d,color:#000
+    style C fill:#f94144,color:#fff
+    style D fill:#577590,color:#fff
+    style E fill:#6d6875,color:#fff
 ```
 
 ---
