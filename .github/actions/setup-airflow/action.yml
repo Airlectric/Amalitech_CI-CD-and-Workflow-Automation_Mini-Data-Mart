@@ -23,10 +23,17 @@ runs:
         mkdir -p data/data_docs logs
         chmod -R 777 data logs
 
+    - name: Cache Docker layers
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: docker-${{ runner.os }}-${{ hashFiles('Dockerfile', 'requirements.txt') }}
+        restore-keys: docker-${{ runner.os }}-
+
     - name: Start services
       shell: bash
-      run: docker compose up -d --build
-      timeout-minutes: 10
+      run: |
+        timeout 600 docker compose up -d --build || { echo "ERROR: docker compose build timed out after 10 minutes"; exit 1; }
 
     - name: Wait for Airflow to be ready
       shell: bash

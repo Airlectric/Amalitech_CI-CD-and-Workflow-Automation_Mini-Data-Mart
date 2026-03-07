@@ -152,7 +152,7 @@ class DuckDBValidator:
         Returns:
             Dict with 'valid', 'errors', 'warnings'
         """
-        result = {"valid": True, "errors": [], "warnings": []}
+        result: dict[str, Any] = {"valid": True, "errors": [], "warnings": []}
 
         actual_columns = set(df.columns)
         expected_columns_set = set(expected_columns)
@@ -187,7 +187,7 @@ class DuckDBValidator:
         Returns:
             Dict with 'valid' and 'errors'
         """
-        result = {"valid": True, "errors": []}
+        result: dict[str, Any] = {"valid": True, "errors": []}
 
         type_mapping = {
             "integer": "int",
@@ -217,7 +217,7 @@ class DuckDBValidator:
         self, df: pd.DataFrame, column: str, min_value: float | None = None, max_value: float | None = None
     ) -> dict[str, Any]:
         """Validate numeric column is within range."""
-        result = {"valid": True, "errors": []}
+        result: dict[str, Any] = {"valid": True, "errors": []}
 
         if column not in df.columns:
             result["valid"] = False
@@ -240,7 +240,7 @@ class DuckDBValidator:
 
     def validate_uniqueness(self, df: pd.DataFrame, columns: list[str]) -> dict[str, Any]:
         """Check for duplicate values in specified columns."""
-        result = {"valid": True, "errors": []}
+        result: dict[str, Any] = {"valid": True, "errors": []}
 
         duplicates = df[df.duplicated(subset=columns, keep=False)]
         if not duplicates.empty:
@@ -265,7 +265,7 @@ class DuckDBValidator:
         Returns:
             Dict with validation results
         """
-        validation_results = {
+        validation_results: dict[str, Any] = {
             "row_count": len(df),
             "schema_valid": True,
             "data_valid": True,

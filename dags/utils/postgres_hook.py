@@ -20,7 +20,7 @@ class PostgresLayerHook(PostgresHook):
         )
         return len(df)
 
-    def execute_query(self, query: str, parameters: tuple | None = None) -> list[tuple]:
+    def execute_query(self, query: str, parameters: tuple | None = None) -> tuple[list, list]:
         conn = self.get_conn()
         cursor = conn.cursor()
         try:
@@ -86,7 +86,7 @@ class PostgresLayerHook(PostgresHook):
         dataset_name: str,
         status: str,
         record_count: int = 0,
-        checksum: str = None,
+        checksum: str | None = None,
         error_message: str | None = None,
     ):
         query = """
@@ -121,8 +121,8 @@ class PostgresLayerHook(PostgresHook):
         df,
         table: str,
         schema: str = "silver",
-        conflict_columns: list[str] = None,
-        update_columns: list[str] = None,
+        conflict_columns: list[str] | None = None,
+        update_columns: list[str] | None = None,
     ):
         if df.empty:
             return 0
@@ -159,7 +159,7 @@ class PostgresLayerHook(PostgresHook):
             cursor.close()
             conn.close()
 
-    def insert_quarantine(self, records: list[dict], table: str, schema: str = "quarantine", run_id: str = None) -> int:
+    def insert_quarantine(self, records: list[dict], table: str, schema: str = "quarantine", run_id: str | None = None) -> int:
         """Insert bad records into quarantine table"""
         if not records:
             return 0
@@ -215,7 +215,7 @@ class PostgresLayerHook(PostgresHook):
         rows_written_silver: int = 0,
         rows_quarantined: int = 0,
         status: str = "COMPLETED",
-        files_scanned: list[str] = None,
+        files_scanned: list[str] | None = None,
     ):
         """Update audit.ingestion_runs with final counts"""
         query = """

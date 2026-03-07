@@ -293,7 +293,7 @@ def save_to_parquet_local(df: pd.DataFrame, output_path: str) -> str:
     return output_path
 
 
-def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str, s3_client, ingest_date: str = None) -> dict:
+def upload_to_minio(df: pd.DataFrame, bucket: str, dataset_name: str, s3_client, ingest_date: str | None = None) -> dict:
     """
     Upload parquet to MinIO with proper path convention.
 
@@ -341,7 +341,7 @@ def generate_batch_to_minio(
     dataset_name: str = "sales",
     bucket: str = "bronze",
     s3_client=None,
-    ingest_date: str = None,
+    ingest_date: str | None = None,
     mode: str = "clean",
 ) -> list[dict]:
     """
