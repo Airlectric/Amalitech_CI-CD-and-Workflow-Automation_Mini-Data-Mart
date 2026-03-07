@@ -38,64 +38,101 @@ A production-grade containerized data platform implementing the **Medallion Arch
 
 ```mermaid
 flowchart TB
-    subgraph Sources["Data Sources"]
-        DG["Data Generator<br/>(6 quality modes)"]
+
+%% ================= PLATFORM =================
+subgraph Platform["Data Platform"]
+direction TB
+
+    %% -------- DATA GENERATION --------
+    DG["<img src='https://simpleicons.org/icons/apacheairflow.svg' width='24'/> Data Generator<br/>(6 Quality Modes)"]
+
+    %% -------- STORAGE --------
+    subgraph Storage["MinIO Object Storage"]
+        Bronze["<img src='https://simpleicons.org/icons/apacheparquet.svg' width='24'/> Bronze Layer<br/>S3 Parquet Files"]
     end
 
-    subgraph Lake["Object Storage"]
-        Bronze["MinIO<br/>Bronze Layer<br/>(Parquet)"]
+    %% -------- AIRFLOW --------
+    subgraph Airflow["Apache Airflow"]
+    direction TB
+        Ingest["<img src='https://simpleicons.org/icons/apacheairflow.svg' width='24'/> Ingest DAG<br/>Two-Tier Validation"]
+        Quality["<img src='https://simpleicons.org/icons/apacheairflow.svg' width='24'/> Quality DAG<br/>6 Parallel Checks"]
+        Remediate["<img src='https://simpleicons.org/icons/apacheairflow.svg' width='24'/> Remediation DAG<br/>Manual Trigger"]
+        GoldDAG["<img src='https://simpleicons.org/icons/apacheairflow.svg' width='24'/> Gold DAG<br/>Triggered Rebuild"]
     end
 
-    subgraph Orchestration["Apache Airflow"]
-        Ingest["Ingest DAG<br/>(DuckDB validation)"]
-        Quality["Quality DAG<br/>(6 parallel checks)"]
-        Gold_DAG["Gold DAG<br/>(Star Schema)"]
-        Remediation["Remediation DAG<br/>(batch replay)"]
+    %% -------- WAREHOUSE --------
+    subgraph Warehouse["PostgreSQL Warehouse"]
+    direction TB
+        Silver["<img src='https://simpleicons.org/icons/postgresql.svg' width='24'/> Silver Layer<br/>sales · customers · products"]
+        Quarantine["<img src='https://simpleicons.org/icons/postgresql.svg' width='24'/> Quarantine<br/>sales_failed"]
+
+        %% Invisible spacer to push Meta down
+        MetaSpacer[" "]
+
+        Meta["<img src='https://simpleicons.org/icons/postgresql.svg' width='24'/> Metadata & Audit<br/>file tracking · run counts"]
+        Gold["<img src='https://simpleicons.org/icons/postgresql.svg' width='24'/> Gold Layer<br/>5 Fact Tables · 2 Views"]
     end
 
-    subgraph Database["PostgreSQL"]
-        Meta["metadata / audit"]
-        Quarantine["quarantine<br/>(failed records)"]
-        Silver["Silver Layer<br/>(sales, customers, products)"]
-        Gold["Gold Layer<br/>(5 fact tables, 2 views)"]
+    %% -------- SERVICES --------
+    subgraph Services
+    direction LR
+
+        subgraph Observability
+        direction TB
+            StatsD["<img src='https://www.svgrepo.com/show/283581/bar-chart-statistics.svg' width='24'/> StatsD Metrics"]
+            Prom["<img src='https://simpleicons.org/icons/prometheus.svg' width='24'/> Prometheus :9090"]
+            Graf["<img src='https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/grafana-icon.svg' width='24'/> Grafana :3001"]
+            StatsD --> Prom --> Graf
+        end
+
+        subgraph Analytics
+            MB["<img src='https://simpleicons.org/icons/metabase.svg' width='24'/> Metabase :3000<br/>7 Dashboards"]
+            Duck["<img src='https://simpleicons.org/icons/duckdb.svg' width='24'/> DuckDB API :8000<br/>Ad-hoc SQL"]
+        end
+
     end
 
-    subgraph Monitoring["Observability"]
-        StatsD["statsd-exporter"]
-        Prom["Prometheus"]
-        Grafana["Grafana<br/>(4 dashboards)"]
-    end
+end
 
-    subgraph Analytics["Analytics"]
-        MB["Metabase<br/>(7 dashboards)"]
-        DuckAPI["DuckDB API<br/>(ad-hoc SQL)"]
-    end
+%% ================= MAIN PIPELINE =================
+DG --> Bronze
+Bronze --> Ingest
 
-    DG -->|Parquet| Bronze
-    Bronze -->|schema-on-read| Ingest
-    Ingest -->|clean rows| Silver
-    Ingest -->|bad rows| Quarantine
-    Ingest -->|file tracking| Meta
-    Ingest -->|triggers| Gold_DAG
-    Silver --> Quality
-    Quality -->|PDF + email| Alerts["Alerts"]
-    Quarantine --> Remediation
-    Remediation -->|batch upsert| Silver
-    Remediation -->|triggers| Gold_DAG
-    Silver --> Gold_DAG
-    Gold_DAG --> Gold
-    Gold --> MB
-    Bronze --> DuckAPI
+Ingest -->|clean rows| Silver
+Ingest -->|bad rows| Quarantine
+Ingest -->|file tracking| Meta
 
-    Orchestration -->|StatsD UDP| StatsD
-    StatsD --> Prom
-    Prom --> Grafana
+Silver --> GoldDAG
+GoldDAG --> Gold
 
-    style Bronze fill:#CD7F32,color:#fff
-    style Silver fill:#C0C0C0,color:#000
-    style Gold fill:#FFD700,color:#000
-    style Quarantine fill:#E74C3C,color:#fff
-    style Meta fill:#9B59B6,color:#fff
+%% ================= QUALITY & REMEDIATION =================
+Quality -->|monitors| Silver
+
+Quarantine --> Remediate
+Remediate -->|replay fixed rows| Silver
+Remediate -->|trigger rebuild| GoldDAG
+
+%% ================= ANALYTICS =================
+Gold --> MB
+Bronze --> Duck
+
+%% ================= OBSERVABILITY =================
+DG --> StatsD
+Bronze --> StatsD
+Ingest --> StatsD
+Quality --> StatsD
+Remediate --> StatsD
+GoldDAG --> StatsD
+Silver --> StatsD
+Gold --> StatsD
+
+%% ---------------- STYLES ----------------
+style Bronze fill:#CD7F32,color:#fff,stroke:#333,stroke-width:2px
+style Silver fill:#C0C0C0,color:#000,stroke:#333,stroke-width:2px
+style Gold fill:#FFD700,color:#000,stroke-width:2px
+style Quarantine fill:#E74C3C,color:#fff,stroke:#333,stroke-width:2px
+style Meta fill:#9B59B6,color:#fff,stroke:#333,stroke-width:2px
+style MetaSpacer fill:none,stroke:none
 ```
 
 ### Data Flow Sequence
