@@ -189,14 +189,24 @@ jobs:
           done
 
           echo "Waiting for Airflow API..."
+          AIRFLOW_READY=false
           for i in $(seq 1 60); do
-            if curl -sf http://localhost:8080/api/v1/health >/dev/null 2>&1; then
+            if curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null 2>&1; then
               echo "Airflow API is ready"
+              AIRFLOW_READY=true
               break
             fi
             echo "Waiting for Airflow... ($i/60)"
             sleep 5
           done
+          if [ "$AIRFLOW_READY" = "false" ]; then
+            echo "ERROR: Airflow API did not become healthy"
+            echo "=== airflow-api-server logs ==="
+            docker compose logs airflow-api-server --tail=50
+            echo "=== airflow-init logs ==="
+            docker compose logs airflow-init --tail=30
+            exit 1
+          fi
 
       - name: Verify all containers are running
         run: |
@@ -254,14 +264,24 @@ jobs:
 
       - name: Wait for Airflow to be ready
         run: |
+          AIRFLOW_READY=false
           for i in $(seq 1 60); do
-            if curl -sf http://localhost:8080/api/v1/health >/dev/null 2>&1; then
+            if curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null 2>&1; then
               echo "Airflow API is ready"
+              AIRFLOW_READY=true
               break
             fi
             echo "Waiting for Airflow... ($i/60)"
             sleep 5
           done
+          if [ "$AIRFLOW_READY" = "false" ]; then
+            echo "ERROR: Airflow API did not become healthy"
+            echo "=== airflow-api-server logs ==="
+            docker compose logs airflow-api-server --tail=50
+            echo "=== airflow-init logs ==="
+            docker compose logs airflow-init --tail=30
+            exit 1
+          fi
 
       - name: Unpause DAGs
         run: |
