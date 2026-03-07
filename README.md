@@ -371,24 +371,6 @@ open http://localhost:3001
 
 **audit.ingestion_runs**: ingestion_run_id (PK, UUID), started_at, finished_at, files_scanned (TEXT[]), rows_read, rows_written_silver, rows_quarantined, status, operator
 
-### Quarantine Record Lifecycle
-
-```mermaid
-flowchart TD
-    A["pending\n(initial state on insert)"]
-    A -->|validation passes| B["remediated\n(replayed into silver)"]
-    A -->|validation fails| C["rejected\n(unfixable)"]
-    B -->|batch replay fails\nretry_count incremented| D{retry_count\n>= max_retries?}
-    D -->|No| A
-    D -->|Yes| E["dead_letter\n(needs manual investigation)"]
-
-    style A fill:#f9c74f,color:#000
-    style B fill:#90be6d,color:#000
-    style C fill:#f94144,color:#fff
-    style D fill:#577590,color:#fff
-    style E fill:#6d6875,color:#fff
-```
-
 ---
 
 ## CI/CD Pipeline
