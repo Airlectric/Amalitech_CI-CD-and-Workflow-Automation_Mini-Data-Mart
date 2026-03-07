@@ -311,51 +311,75 @@ jobs:
             echo " -> $dag (HTTP $HTTP_CODE)"
           done
 
-      - name: "Step 1: Generate sample data (MinIO ingestion)"
+      - name: "Trigger and wait for DAGs"
         run: |
-          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v1/dags/generate_sample_data/dagRuns" \
-            -H 'Content-Type: application/json' -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['dag_run_id'])")
-          echo "Triggered generate_sample_data: $RUN_ID"
-          for i in $(seq 1 30); do
-            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v1/dags/generate_sample_data/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
-            if [ "$STATE" = "success" ]; then
-              echo "generate_sample_data: SUCCESS"
-              break
-            elif [ "$STATE" = "failed" ]; then
-              echo "generate_sample_data: FAILED"
-              docker compose logs airflow-worker --tail=30
+          AUTH="admin:airflow"
+          BASE="http://localhost:8080"
+
+          trigger_and_wait() {
+            local dag_id=$1
+            local max_wait=${2:-30}
+
+            # Try v1 then v2 for trigger
+            RESPONSE=$(curl -s -u "$AUTH" -X POST "$BASE/api/v1/dags/$dag_id/dagRuns" \
+              -H 'Content-Type: application/json' -d '{}' 2>&1)
+            RUN_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('dag_run_id',''))" 2>/dev/null)
+
+            if [ -z "$RUN_ID" ]; then
+              echo "v1 trigger failed for $dag_id, trying v2..."
+              echo "v1 response: $RESPONSE"
+              RESPONSE=$(curl -s -u "$AUTH" -X POST "$BASE/api/v2/dags/$dag_id/dagRuns" \
+                -H 'Content-Type: application/json' -d '{}' 2>&1)
+              RUN_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('dag_run_id',''))" 2>/dev/null)
+            fi
+
+            if [ -z "$RUN_ID" ]; then
+              echo "ERROR: Could not trigger $dag_id"
+              echo "Response: $RESPONSE"
               exit 1
             fi
-            echo "  state=$STATE ($i/30)"
-            sleep 10
-          done
 
-      - name: "Validate: Data exists in MinIO (Bronze layer)"
-        run: |
+            echo "Triggered $dag_id: $RUN_ID"
+
+            # Poll for completion - try v1 then v2
+            for i in $(seq 1 $max_wait); do
+              STATE=$(curl -s -u "$AUTH" "$BASE/api/v1/dags/$dag_id/dagRuns/$RUN_ID" 2>/dev/null \
+                | python3 -c "import sys,json; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+
+              if [ -z "$STATE" ]; then
+                STATE=$(curl -s -u "$AUTH" "$BASE/api/v2/dags/$dag_id/dagRuns/$RUN_ID" 2>/dev/null \
+                  | python3 -c "import sys,json; print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+              fi
+
+              if [ "$STATE" = "success" ]; then
+                echo "$dag_id: SUCCESS"
+                return 0
+              elif [ "$STATE" = "failed" ]; then
+                echo "$dag_id: FAILED"
+                docker compose logs airflow-worker --tail=30
+                return 1
+              fi
+              echo "  $dag_id: state=$STATE ($i/$max_wait)"
+              sleep 10
+            done
+            echo "ERROR: $dag_id timed out"
+            return 1
+          }
+
+          echo "=== Step 1: Generate sample data ==="
+          trigger_and_wait generate_sample_data 30
+
+          echo ""
+          echo "=== Validate: MinIO Bronze layer ==="
           OBJECTS=$(docker compose exec -T minio mc ls local/bronze/ 2>/dev/null | wc -l || echo "0")
           echo "MinIO bronze objects: $OBJECTS"
 
-      - name: "Step 2: Ingest bronze to silver (Airflow processing)"
-        run: |
-          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v1/dags/ingest_bronze_to_silver/dagRuns" \
-            -H 'Content-Type: application/json' -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['dag_run_id'])")
-          echo "Triggered ingest_bronze_to_silver: $RUN_ID"
-          for i in $(seq 1 30); do
-            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v1/dags/ingest_bronze_to_silver/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
-            if [ "$STATE" = "success" ]; then
-              echo "ingest_bronze_to_silver: SUCCESS"
-              break
-            elif [ "$STATE" = "failed" ]; then
-              echo "ingest_bronze_to_silver: FAILED"
-              docker compose logs airflow-worker --tail=30
-              exit 1
-            fi
-            echo "  state=$STATE ($i/30)"
-            sleep 10
-          done
+          echo ""
+          echo "=== Step 2: Ingest bronze to silver ==="
+          trigger_and_wait ingest_bronze_to_silver 30
 
-      - name: "Validate: Data exists in PostgreSQL silver layer"
-        run: |
+          echo ""
+          echo "=== Validate: Silver layer ==="
           SILVER_COUNT=$(docker compose exec -T postgres psql -U airflow -d airflow -t -c "SELECT COUNT(*) FROM silver.sales;" | tr -d ' ')
           echo "silver.sales row count: $SILVER_COUNT"
           if [ "$SILVER_COUNT" -eq 0 ]; then
@@ -364,24 +388,9 @@ jobs:
           fi
           echo "Silver layer validated: $SILVER_COUNT rows"
 
-      - name: "Step 3: Run silver to gold aggregation"
-        run: |
-          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v1/dags/silver_to_gold/dagRuns" \
-            -H 'Content-Type: application/json' -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['dag_run_id'])")
-          echo "Triggered silver_to_gold: $RUN_ID"
-          for i in $(seq 1 30); do
-            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v1/dags/silver_to_gold/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
-            if [ "$STATE" = "success" ]; then
-              echo "silver_to_gold: SUCCESS"
-              break
-            elif [ "$STATE" = "failed" ]; then
-              echo "silver_to_gold: FAILED"
-              docker compose logs airflow-worker --tail=30
-              exit 1
-            fi
-            echo "  state=$STATE ($i/30)"
-            sleep 10
-          done
+          echo ""
+          echo "=== Step 3: Silver to gold aggregation ==="
+          trigger_and_wait silver_to_gold 30
 
       - name: "Validate: Gold layer has aggregated data"
         run: |
