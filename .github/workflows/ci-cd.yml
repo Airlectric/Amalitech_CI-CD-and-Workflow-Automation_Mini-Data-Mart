@@ -296,29 +296,59 @@ jobs:
             sleep 10
           done
 
-      - name: Unpause and trigger DAGs
+      - name: Check scheduler and worker health
+        run: |
+          echo "=== Container Status ==="
+          docker compose ps
+
+          echo ""
+          echo "=== Scheduler logs (last 20 lines) ==="
+          docker compose logs airflow-scheduler --tail=20
+
+          echo ""
+          echo "=== Worker logs (last 20 lines) ==="
+          docker compose logs airflow-worker --tail=20
+
+      - name: Unpause all DAGs via database
+        run: |
+          echo "Unpausing all DAGs directly in the metadata database..."
+          docker compose exec -T postgres psql -U airflow -d airflow -c "UPDATE dag SET is_paused = false;"
+          echo "Verifying unpause:"
+          docker compose exec -T postgres psql -U airflow -d airflow -c "SELECT dag_id, is_paused FROM dag ORDER BY dag_id;"
+
+      - name: Trigger and validate DAGs
         run: |
           trigger_and_wait() {
             local dag_id=$1
-            echo "--- Unpausing $dag_id ---"
-            docker compose exec -T airflow-api-server airflow dags unpause "$dag_id" || true
             echo "--- Triggering $dag_id ---"
-            docker compose exec -T airflow-api-server airflow dags trigger "$dag_id"
+            docker compose exec -T airflow-scheduler airflow dags trigger "$dag_id"
             echo "--- Waiting for $dag_id ---"
-            for i in $(seq 1 30); do
-              STATE=$(docker compose exec -T airflow-api-server airflow dags list-runs -d "$dag_id" -o plain 2>/dev/null | grep -o 'success\|failed' | head -1)
+            for i in $(seq 1 60); do
+              # Get raw output for debugging on first iteration
+              if [ "$i" -eq 1 ]; then
+                echo "  Raw list-runs output:"
+                docker compose exec -T airflow-scheduler airflow dags list-runs -d "$dag_id" -o plain 2>/dev/null || true
+              fi
+              STATE=$(docker compose exec -T airflow-scheduler airflow dags list-runs -d "$dag_id" -o plain 2>/dev/null | tail -1 | awk '{print $NF}')
               if [ "$STATE" = "success" ]; then
                 echo "$dag_id: SUCCESS"
                 return 0
               elif [ "$STATE" = "failed" ]; then
                 echo "$dag_id: FAILED"
+                echo "=== Task instances ==="
+                docker compose exec -T airflow-scheduler airflow tasks states-for-dag-run "$dag_id" "$(docker compose exec -T airflow-scheduler airflow dags list-runs -d "$dag_id" -o plain 2>/dev/null | tail -1 | awk '{print $2}')" -o plain 2>/dev/null || true
                 docker compose logs airflow-worker --tail=30
+                docker compose logs airflow-scheduler --tail=20
                 return 1
               fi
-              echo "  $dag_id: waiting... ($i/30)"
+              echo "  $dag_id: state=$STATE ($i/60)"
               sleep 10
             done
             echo "ERROR: $dag_id timed out"
+            echo "=== Scheduler logs ==="
+            docker compose logs airflow-scheduler --tail=30
+            echo "=== Worker logs ==="
+            docker compose logs airflow-worker --tail=30
             return 1
           }
 
