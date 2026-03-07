@@ -468,7 +468,9 @@ def send_data_quality_alert(
     </html>
     """
 
-    return send_throttled_alert(subject, html_body, recipient, severity, "data_quality", attachment_path=attachment_path)
+    return send_throttled_alert(
+        subject, html_body, recipient, severity, "data_quality", attachment_path=attachment_path
+    )
 
 
 def send_remediation_alert(
