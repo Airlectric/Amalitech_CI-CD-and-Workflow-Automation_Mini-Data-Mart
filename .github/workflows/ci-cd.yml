@@ -283,22 +283,41 @@ jobs:
             exit 1
           fi
 
+      - name: Wait for DAGs to be parsed
+        run: |
+          echo "Waiting for DAGs to be registered..."
+          for i in $(seq 1 30); do
+            COUNT=$(curl -s -u "admin:airflow" "http://localhost:8080/api/v1/dags?limit=100" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_entries',0))" 2>/dev/null || echo "0")
+            echo "  DAGs found: $COUNT ($i/30)"
+            if [ "$COUNT" -ge 4 ]; then
+              echo "All DAGs registered"
+              break
+            fi
+            sleep 10
+          done
+
       - name: Unpause DAGs
         run: |
           for dag in generate_sample_data ingest_bronze_to_silver data_quality_checks silver_to_gold; do
-            curl -sf -u "admin:airflow" -X PATCH "http://localhost:8080/api/v2/dags/$dag" \
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "admin:airflow" -X PATCH "http://localhost:8080/api/v1/dags/$dag" \
               -H 'Content-Type: application/json' \
-              -d '{"is_paused": false}'
-            echo " -> Unpaused $dag"
+              -d '{"is_paused": false}')
+            if [ "$HTTP_CODE" -ge 400 ]; then
+              echo "WARN: Failed to unpause $dag via v1 (HTTP $HTTP_CODE), trying v2..."
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "admin:airflow" -X PATCH "http://localhost:8080/api/v2/dags/$dag" \
+                -H 'Content-Type: application/json' \
+                -d '{"is_paused": false}')
+            fi
+            echo " -> $dag (HTTP $HTTP_CODE)"
           done
 
       - name: "Step 1: Generate sample data (MinIO ingestion)"
         run: |
-          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v2/dags/generate_sample_data/dagRuns" \
+          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v1/dags/generate_sample_data/dagRuns" \
             -H 'Content-Type: application/json' -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['dag_run_id'])")
           echo "Triggered generate_sample_data: $RUN_ID"
           for i in $(seq 1 30); do
-            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v2/dags/generate_sample_data/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
+            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v1/dags/generate_sample_data/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
             if [ "$STATE" = "success" ]; then
               echo "generate_sample_data: SUCCESS"
               break
@@ -318,11 +337,11 @@ jobs:
 
       - name: "Step 2: Ingest bronze to silver (Airflow processing)"
         run: |
-          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v2/dags/ingest_bronze_to_silver/dagRuns" \
+          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v1/dags/ingest_bronze_to_silver/dagRuns" \
             -H 'Content-Type: application/json' -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['dag_run_id'])")
           echo "Triggered ingest_bronze_to_silver: $RUN_ID"
           for i in $(seq 1 30); do
-            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v2/dags/ingest_bronze_to_silver/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
+            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v1/dags/ingest_bronze_to_silver/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
             if [ "$STATE" = "success" ]; then
               echo "ingest_bronze_to_silver: SUCCESS"
               break
@@ -347,11 +366,11 @@ jobs:
 
       - name: "Step 3: Run silver to gold aggregation"
         run: |
-          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v2/dags/silver_to_gold/dagRuns" \
+          RUN_ID=$(curl -sf -u "admin:airflow" -X POST "http://localhost:8080/api/v1/dags/silver_to_gold/dagRuns" \
             -H 'Content-Type: application/json' -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin)['dag_run_id'])")
           echo "Triggered silver_to_gold: $RUN_ID"
           for i in $(seq 1 30); do
-            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v2/dags/silver_to_gold/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
+            STATE=$(curl -sf -u "admin:airflow" "http://localhost:8080/api/v1/dags/silver_to_gold/dagRuns/$RUN_ID" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
             if [ "$STATE" = "success" ]; then
               echo "silver_to_gold: SUCCESS"
               break
