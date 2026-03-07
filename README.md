@@ -167,27 +167,7 @@ docker compose exec postgres psql -U airflow -d airflow \
 
 ### DAG Dependency Graph
 
-```mermaid
-flowchart LR
-    A["generate_sample_data<br/><i>3x daily</i>"] -->|Parquet to MinIO| B
-
-    subgraph Ingestion
-        B["ingest_bronze_to_silver<br/><i>every 6h</i>"]
-    end
-
-    B -->|TriggerDagRunOperator| C["silver_to_gold"]
-
-    subgraph Quality
-        D["data_quality_checks<br/><i>every 6h</i>"]
-    end
-
-    subgraph Remediation
-        E["remediation_workflow<br/><i>manual</i>"]
-    end
-
-    E -->|TriggerDagRunOperator| C
-    B -.->|data available| D
-```
+![DAG Dependency Graph](docs/architecture/dag_dependency_graph.png)
 
 ### Medallion Architecture
 
@@ -241,26 +221,7 @@ Six checks run in parallel every 6 hours:
 
 The `remediation_workflow` DAG processes quarantined records with production-grade patterns:
 
-```mermaid
-flowchart TD
-    Start["Fetch pending batch<br/>(configurable size)"] --> Validate["Validate records"]
-
-    Validate --> Valid{"Fixable?"}
-    Valid -->|Yes| Batch["Batch upsert to silver<br/>(single transaction)"]
-    Valid -->|No| Reject["Batch reject<br/>(mark as rejected)"]
-
-    Batch --> Mark["Mark as remediated"]
-    Batch -->|Transaction failed| Retry["Increment retry_count"]
-    Reject --> More{"More batches?"}
-    Mark --> More
-    Retry --> More
-
-    More -->|Yes| Start
-    More -->|No| DeadLetter["Escalate records with<br/>retry_count >= max to dead-letter"]
-
-    DeadLetter --> Trigger["Trigger silver_to_gold<br/>rebuild"]
-    Trigger --> Notify["Send email notification"]
-```
+![Remediation Workflow](docs/architecture/remediation_workflow.png)
 
 **Key design decisions:**
 
@@ -468,37 +429,7 @@ All dashboard queries are documented in [`docs/dashboard_queries.sql`](docs/dash
 
 ## CI/CD Pipeline
 
-```mermaid
-flowchart TD
-    Trigger["Push / PR to master<br/>or manual dispatch"]
-
-    Trigger --> Lint
-    Trigger --> Tests
-    Trigger --> Security
-
-    subgraph CI["CI: Parallel Jobs"]
-        Lint["Lint & Type Check<br/>ruff check · ruff format · mypy"]
-        Tests["Unit Tests<br/>pytest · pytest-cov"]
-        Security["Security Scan<br/>bandit · pip-audit"]
-    end
-
-    Lint --> Gate{All passed?}
-    Tests --> Gate
-    Security --> Gate
-
-    Gate -->|Yes + push to master| Build["Build & Push<br/>Docker image → GHCR"]
-    Gate -->|PR or failure| Stop["Done"]
-
-    Build --> Deploy["CD: Deploy to Test<br/>docker compose up · schema validation"]
-    Build --> Validate["Data Flow Validation<br/>MinIO → Airflow → PostgreSQL → Metabase"]
-
-    style Lint fill:#2563eb,color:#fff
-    style Tests fill:#16a34a,color:#fff
-    style Security fill:#dc2626,color:#fff
-    style Build fill:#7c3aed,color:#fff
-    style Deploy fill:#0891b2,color:#fff
-    style Validate fill:#ca8a04,color:#000
-```
+![CI/CD Pipeline](docs/architecture/cicd_pipeline.png)
 
 | Job | Tools | What It Does |
 |-----|-------|-------------|
