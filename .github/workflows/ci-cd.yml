@@ -119,15 +119,17 @@ jobs:
         run: bandit -r dags/ scripts/ -c pyproject.toml -ll -f json -o bandit-report.json
 
       - name: Run pip-audit
-        run: pip-audit -r requirements.txt
+        run: pip-audit -r requirements.txt -f json -o pip-audit-report.json
         continue-on-error: true
 
-      - name: Upload security report
+      - name: Upload security reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-report
-          path: bandit-report.json
+          path: |
+            bandit-report.json
+            pip-audit-report.json
 
       - name: Extract SMTP credentials from ENV_FILE
         if: always()
@@ -141,7 +143,8 @@ jobs:
         if: always()
         uses: ./.github/actions/email-report
         with:
-          report-path: bandit-report.json
+          bandit-report-path: bandit-report.json
+          pip-audit-report-path: pip-audit-report.json
           smtp-user: ${{ env.SMTP_USER }}
           smtp-password: ${{ env.SMTP_PASSWORD }}
 
