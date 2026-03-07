@@ -16,4 +16,4 @@ RUN pip install --no-cache-dir -r /requirements.txt
 USER root
 RUN mkdir -p /opt/airflow/dags /opt/airflow/logs /opt/airflow/data /opt/airflow/scripts \
     && chown -R airflow: /opt/airflow
-ENV PYTHONPATH="/opt/airflow/dags:/opt/airflow/scripts:${PYTHONPATH}"
+ENV PYTHONPATH="/opt/airflow/dags:/opt/airflow/scripts:${PYTHONPATH:-}"
